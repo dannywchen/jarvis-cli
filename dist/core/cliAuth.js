@@ -5,7 +5,13 @@ import http from "http";
 import crypto from "crypto";
 import { exec, spawn } from "child_process";
 import { promisify } from "util";
+import "dotenv/config";
+export const DEFAULT_CODEX_MODEL = "gpt-5.6-luna";
+export const DEFAULT_CODEX_REASONING_EFFORT = "high";
 const execAsync = promisify(exec);
+// OAuth client credentials stay outside the repository. Existing Gemini and
+// Antigravity sessions continue to work without these values; they are only
+// needed when starting a fresh browser-based Google OAuth flow.
 export const GEMINI_CLIENT_ID = process.env.GEMINI_CLIENT_ID || "";
 export const GEMINI_CLIENT_SECRET = process.env.GEMINI_CLIENT_SECRET || "";
 export const ANTIGRAVITY_CLIENT_ID = process.env.ANTIGRAVITY_CLIENT_ID || "";
@@ -18,6 +24,7 @@ export const GOOGLE_SCOPES = [
 ];
 export const REDIRECT_PORT = 51121;
 export const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/oauth-callback`;
+const OAUTH_TIMEOUT_MS = 2 * 60 * 1000;
 function parseJwtEmail(jwtToken) {
     if (!jwtToken || !jwtToken.includes("."))
         return undefined;
@@ -32,6 +39,43 @@ function parseJwtEmail(jwtToken) {
         return undefined;
     }
 }
+function getExpiryMs(tokenObject) {
+    const rawExpiry = tokenObject.expiry_date ?? tokenObject.expiry;
+    if (typeof rawExpiry === "number") {
+        return rawExpiry < 1_000_000_000_000 ? rawExpiry * 1000 : rawExpiry;
+    }
+    if (typeof rawExpiry === "string" && rawExpiry.trim()) {
+        const parsed = Number(rawExpiry);
+        if (Number.isFinite(parsed))
+            return parsed < 1_000_000_000_000 ? parsed * 1000 : parsed;
+        return Date.parse(rawExpiry);
+    }
+    return 0;
+}
+function hasUsableGoogleCredential(tokenObject) {
+    const expiryMs = getExpiryMs(tokenObject);
+    return !!tokenObject.refresh_token || (!!tokenObject.access_token && expiryMs > Date.now());
+}
+function readCachedGoogleEmail(home) {
+    try {
+        const accountsPath = path.join(home, ".gemini", "google_accounts.json");
+        const accounts = JSON.parse(fs.readFileSync(accountsPath, "utf-8"));
+        return typeof accounts.active === "string" ? accounts.active : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+export function getAntigravityCliPath() {
+    const home = os.homedir();
+    const candidates = [
+        ...((process.env.PATH || "").split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, "agy"))),
+        path.join(home, ".local", "bin", "agy"),
+        "/opt/homebrew/bin/agy",
+        "/usr/local/bin/agy",
+    ];
+    return candidates.find((candidate) => fs.existsSync(candidate)) || "agy";
+}
 export function scanDetectedCliSessions() {
     const home = os.homedir();
     const sessions = [];
@@ -40,15 +84,15 @@ export function scanDetectedCliSessions() {
         try {
             const data = JSON.parse(fs.readFileSync(jetskiPath, "utf-8"));
             const tokenObj = data.token || data;
-            const email = parseJwtEmail(tokenObj.id_token) || "dannywchenofficial@gmail.com";
+            const email = parseJwtEmail(tokenObj.id_token) || readCachedGoogleEmail(home) || "Authenticated Google account";
             sessions.push({
                 provider: "gemini",
                 harness: "antigravity-cli",
-                name: "Antigravity CLI (OAuth)",
+                name: "Google Code Assist · Antigravity",
                 email,
-                defaultModel: "gemini-3.8-flash-tiered",
+                defaultModel: "gemini-3.8-flash",
                 token: tokenObj.access_token,
-                hasValidSession: !!(tokenObj.access_token || tokenObj.refresh_token),
+                hasValidSession: hasUsableGoogleCredential(tokenObj),
             });
         }
         catch { }
@@ -57,17 +101,17 @@ export function scanDetectedCliSessions() {
     if (fs.existsSync(geminiCredsPath)) {
         try {
             const creds = JSON.parse(fs.readFileSync(geminiCredsPath, "utf-8"));
-            const email = parseJwtEmail(creds.id_token) || "dannywchenofficial@gmail.com";
+            const email = parseJwtEmail(creds.id_token) || readCachedGoogleEmail(home) || "Authenticated Google account";
             const alreadyHasAntigravity = sessions.some((s) => s.harness === "antigravity-cli");
             if (!alreadyHasAntigravity) {
                 sessions.push({
                     provider: "gemini",
                     harness: "gemini-cli",
-                    name: "Gemini CLI (OAuth)",
+                    name: "Google Code Assist · Gemini CLI",
                     email,
-                    defaultModel: "gemini-3.8-flash-tiered",
+                    defaultModel: "gemini-3.8-flash",
                     token: creds.access_token,
-                    hasValidSession: !!(creds.access_token || creds.refresh_token),
+                    hasValidSession: hasUsableGoogleCredential(creds),
                 });
             }
         }
@@ -78,13 +122,13 @@ export function scanDetectedCliSessions() {
         try {
             const codex = JSON.parse(fs.readFileSync(codexPath, "utf-8"));
             const tokens = codex.tokens || {};
-            const email = parseJwtEmail(tokens.id_token) || "dannywchenofficial@gmail.com";
+            const email = parseJwtEmail(tokens.id_token) || "Authenticated ChatGPT account";
             sessions.push({
                 provider: "openai",
                 harness: "codex-cli",
-                name: "OpenAI Codex CLI",
+                name: "ChatGPT Codex CLI",
                 email,
-                defaultModel: "gpt-4o",
+                defaultModel: DEFAULT_CODEX_MODEL,
                 token: tokens.access_token,
                 hasValidSession: !!(tokens.access_token || codex.auth_mode === "chatgpt"),
             });
@@ -99,7 +143,7 @@ export function scanDetectedCliSessions() {
             sessions.push({
                 provider: "anthropic",
                 harness: "claude-cli",
-                name: "Claude Code CLI",
+                name: "Claude Code",
                 email,
                 defaultModel: "claude-3-5-sonnet-20241022",
                 hasValidSession: !!claude.oauthAccount?.emailAddress,
@@ -128,14 +172,14 @@ export async function getValidGoogleAccessToken() {
         try {
             const data = JSON.parse(fs.readFileSync(jetskiPath, "utf-8"));
             const tokenObj = data.token || data;
-            const email = parseJwtEmail(tokenObj.id_token) || "dannywchenofficial@gmail.com";
-            const expiryMs = tokenObj.expiry ? new Date(tokenObj.expiry).getTime() : 0;
+            const email = parseJwtEmail(tokenObj.id_token) || readCachedGoogleEmail(home) || "Authenticated Google account";
+            const expiryMs = getExpiryMs(tokenObj);
             const isExpired = !expiryMs || expiryMs < Date.now() + 5 * 60 * 1000;
             if (!isExpired && tokenObj.access_token) {
                 return { token: tokenObj.access_token, email, harness: "antigravity-cli" };
             }
             if (tokenObj.refresh_token) {
-                const refreshed = await refreshGoogleToken(tokenObj.refresh_token, ANTIGRAVITY_CLIENT_ID, ANTIGRAVITY_CLIENT_SECRET);
+                const refreshed = await refreshGoogleToken(tokenObj.refresh_token, ANTIGRAVITY_CLIENT_ID || GEMINI_CLIENT_ID, ANTIGRAVITY_CLIENT_SECRET || GEMINI_CLIENT_SECRET);
                 if (refreshed?.access_token) {
                     tokenObj.access_token = refreshed.access_token;
                     if (refreshed.expires_in) {
@@ -145,9 +189,6 @@ export async function getValidGoogleAccessToken() {
                     return { token: refreshed.access_token, email, harness: "antigravity-cli" };
                 }
             }
-            if (tokenObj.access_token) {
-                return { token: tokenObj.access_token, email, harness: "antigravity-cli" };
-            }
         }
         catch { }
     }
@@ -155,8 +196,8 @@ export async function getValidGoogleAccessToken() {
     if (fs.existsSync(credsPath)) {
         try {
             const creds = JSON.parse(fs.readFileSync(credsPath, "utf-8"));
-            const email = parseJwtEmail(creds.id_token) || "dannywchenofficial@gmail.com";
-            const expiryMs = creds.expiry_date || 0;
+            const email = parseJwtEmail(creds.id_token) || readCachedGoogleEmail(home) || "Authenticated Google account";
+            const expiryMs = getExpiryMs(creds);
             const isExpired = !expiryMs || expiryMs < Date.now() + 5 * 60 * 1000;
             if (!isExpired && creds.access_token) {
                 return { token: creds.access_token, email, harness: "gemini-cli" };
@@ -171,9 +212,6 @@ export async function getValidGoogleAccessToken() {
                     fs.writeFileSync(credsPath, JSON.stringify(creds, null, 2), "utf-8");
                     return { token: refreshed.access_token, email, harness: "gemini-cli" };
                 }
-            }
-            if (creds.access_token) {
-                return { token: creds.access_token, email, harness: "gemini-cli" };
             }
         }
         catch { }
@@ -201,9 +239,14 @@ export async function refreshGoogleToken(refreshToken, clientId, clientSecret) {
         return null;
     }
 }
-export async function executeCodexPrompt(prompt, model = "gpt-4o") {
+export async function executeCodexPrompt(prompt, model = DEFAULT_CODEX_MODEL, reasoningEffort = DEFAULT_CODEX_REASONING_EFFORT) {
     return new Promise((resolve) => {
-        const child = spawn("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-m", model, prompt], {
+        const args = ["exec", "--ephemeral", "--skip-git-repo-check", "-m", model];
+        if (/^gpt-5(?:\.|-|$)/i.test(model) || /^o\d/i.test(model)) {
+            args.push("-c", `model_reasoning_effort="${reasoningEffort}"`);
+        }
+        args.push(prompt);
+        const child = spawn("codex", args, {
             stdio: ["ignore", "pipe", "pipe"],
         });
         let stdout = "";
@@ -228,6 +271,43 @@ export async function executeCodexPrompt(prompt, model = "gpt-4o") {
         });
     });
 }
+export async function executeAntigravityPrompt(prompt, model = "gemini-3.8-flash-low") {
+    return new Promise((resolve) => {
+        const child = spawn(getAntigravityCliPath(), ["--print", prompt, "--model", model, "--output-format", "text"], {
+            stdio: ["ignore", "pipe", "pipe"],
+            env: process.env,
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (data) => {
+            stdout += data.toString();
+        });
+        child.stderr.on("data", (data) => {
+            stderr += data.toString();
+        });
+        child.on("close", (code) => {
+            if (code === 0 && stdout.trim()) {
+                resolve({ text: stdout.trim() });
+                return;
+            }
+            resolve({
+                text: "",
+                error: stderr.trim() || stdout.trim() || `Antigravity CLI exited with code ${code}`,
+            });
+        });
+        child.on("error", (err) => resolve({ text: "", error: `Could not start Antigravity CLI: ${err.message}` }));
+    });
+}
+export async function runAntigravityCliLogin() {
+    return new Promise((resolve) => {
+        const child = spawn(getAntigravityCliPath(), ["--prompt-interactive"], {
+            stdio: "inherit",
+            env: process.env,
+        });
+        child.on("close", (code) => resolve(code === 0 ? { success: true } : { success: false, error: `Antigravity CLI exited with code ${code}` }));
+        child.on("error", (err) => resolve({ success: false, error: `Could not start Antigravity CLI: ${err.message}` }));
+    });
+}
 export async function startGoogleOAuthServer() {
     if (!GEMINI_CLIENT_ID || !GEMINI_CLIENT_SECRET) {
         throw new Error("Google OAuth requires GEMINI_CLIENT_ID and GEMINI_CLIENT_SECRET environment variables.");
@@ -246,6 +326,14 @@ export async function startGoogleOAuthServer() {
     authUrl.searchParams.set("access_type", "offline");
     authUrl.searchParams.set("prompt", "consent");
     const promise = new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (callback) => {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(timeout);
+            callback();
+        };
         const server = http.createServer(async (req, res) => {
             try {
                 const reqUrl = new URL(req.url || "/", `http://localhost:${REDIRECT_PORT}`);
@@ -254,24 +342,23 @@ export async function startGoogleOAuthServer() {
                     res.end();
                     return;
                 }
+                const returnedState = reqUrl.searchParams.get("state");
+                const oauthError = reqUrl.searchParams.get("error");
+                if (oauthError || returnedState !== state) {
+                    res.writeHead(400, { "Content-Type": "text/plain" });
+                    res.end(oauthError ? `Authentication failed: ${oauthError}` : "Authentication failed: Invalid OAuth state");
+                    finish(() => reject(new Error(oauthError || "Invalid OAuth state")));
+                    server.close();
+                    return;
+                }
                 const code = reqUrl.searchParams.get("code");
                 if (!code) {
                     res.writeHead(400, { "Content-Type": "text/plain" });
                     res.end("Authentication failed: Missing code");
-                    reject(new Error("Missing authorization code"));
+                    finish(() => reject(new Error("Missing authorization code")));
                     server.close();
                     return;
                 }
-                res.writeHead(200, { "Content-Type": "text/html" });
-                res.end(`
-            <html>
-              <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 40px; background: #0f172a; color: #f8fafc;">
-                <h1 style="color: #38bdf8;">DuoCode Authenticated</h1>
-                <p>Google Antigravity / Gemini CLI credentials captured. You can return to your terminal.</p>
-              </body>
-            </html>
-          `);
-                server.close();
                 const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
                     method: "POST",
                     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -285,8 +372,11 @@ export async function startGoogleOAuthServer() {
                     }),
                 });
                 const tokens = (await tokenRes.json());
-                if (!tokens.access_token) {
-                    reject(new Error(tokens.error_description || "Token exchange failed"));
+                if (!tokenRes.ok || !tokens.access_token) {
+                    res.writeHead(502, { "Content-Type": "text/plain" });
+                    res.end("Google sign-in completed, but Jarvis CLI could not exchange the authorization code.");
+                    finish(() => reject(new Error(tokens.error_description || "Token exchange failed")));
+                    server.close();
                     return;
                 }
                 const email = parseJwtEmail(tokens.id_token) || "Google User";
@@ -302,19 +392,37 @@ export async function startGoogleOAuthServer() {
                     expiry_date: Date.now() + (tokens.expires_in || 3600) * 1000,
                     scope: tokens.scope,
                 }, null, 2), "utf-8");
-                resolve({
+                res.writeHead(200, { "Content-Type": "text/html" });
+                res.end(`
+            <html>
+              <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 40px; background: #0f172a; color: #f8fafc;">
+                <h1 style="color: #38bdf8;">Jarvis CLI Authenticated</h1>
+                <p>Google credentials were captured successfully. You can return to your terminal.</p>
+              </body>
+            </html>
+          `);
+                finish(() => resolve({
                     accessToken: tokens.access_token,
                     refreshToken: tokens.refresh_token,
                     email,
-                });
+                }));
+                server.close();
             }
             catch (err) {
-                reject(err);
+                if (!res.headersSent) {
+                    res.writeHead(500, { "Content-Type": "text/plain" });
+                    res.end("Jarvis CLI could not complete Google authentication.");
+                }
+                finish(() => reject(err));
                 server.close();
             }
         });
+        const timeout = setTimeout(() => {
+            finish(() => reject(new Error("Google sign-in timed out after 2 minutes.")));
+            server.close();
+        }, OAUTH_TIMEOUT_MS);
         server.listen(REDIRECT_PORT, () => { });
-        server.on("error", reject);
+        server.on("error", (error) => finish(() => reject(error)));
     });
     return {
         authUrl: authUrl.toString(),

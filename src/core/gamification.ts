@@ -11,16 +11,39 @@ export const ALL_ACHIEVEMENTS = [
   { id: 'flawless', name: 'Flawless Victory', description: 'Finish a lesson with 100% accuracy', icon: '[FLAWLESS]' },
 ];
 
-export function calculateLevel(xp: number): number {
-  return Math.floor(Math.sqrt(Math.max(0, xp) / 40)) + 1;
-}
+export const LEVEL_THRESHOLDS: number[] = [0, 100, 250, 500, 850, 1300];
 
 export function getXpForLevel(level: number): number {
-  return Math.round(Math.pow(level - 1, 2) * 40);
+  if (level <= 1) return 0;
+  if (level <= LEVEL_THRESHOLDS.length) {
+    return LEVEL_THRESHOLDS[level - 1];
+  }
+  let xp = LEVEL_THRESHOLDS[LEVEL_THRESHOLDS.length - 1];
+  let span = 450;
+  for (let l = LEVEL_THRESHOLDS.length + 1; l <= level; l++) {
+    span += 100;
+    xp += span;
+  }
+  return xp;
 }
 
 export function getXpForNextLevel(level: number): number {
-  return Math.round(Math.pow(level, 2) * 40);
+  return getXpForLevel(level + 1);
+}
+
+export function calculateLevel(xp: number): number {
+  const safeXp = Math.max(0, Math.floor(xp || 0));
+  if (safeXp < 100) return 1;
+  if (safeXp < 250) return 2;
+  if (safeXp < 500) return 3;
+  if (safeXp < 850) return 4;
+  if (safeXp < 1300) return 5;
+
+  let level = 6;
+  while (safeXp >= getXpForLevel(level + 1)) {
+    level++;
+  }
+  return level;
 }
 
 export function getLevelProgress(xp: number): { currentLevel: number; nextLevel: number; currentXp: number; targetXp: number; progressPercent: number } {

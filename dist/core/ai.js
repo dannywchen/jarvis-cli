@@ -1,3 +1,6 @@
+import { DEFAULT_OPENAI_MODEL } from './liveClient.js';
+import { evaluateOpenEndedAnswer } from './topicEngine.js';
+export { evaluateOpenEndedAnswer };
 function resolveProviderAndKey(config) {
     if (config?.apiKey) {
         return {
@@ -34,7 +37,7 @@ export async function generateCurriculumWithLlm(doc, pace, config) {
     if (!apiKey || !provider) {
         return null;
     }
-    const systemPrompt = `You are DuoCode, an expert instructional designer fusing Duolingo gamification with Claude Code technical depth.
+    const systemPrompt = `You are Jarvis CLI, an expert instructional designer fusing Duolingo gamification with Claude Code technical depth.
 Create a structured learning course from the following document.
 Pace: ${pace} (accelerated = 3-4 nodes, standard = 6-8 nodes, deep = 10-14 nodes).
 Format response STRICTLY as valid JSON matching this schema:
@@ -125,7 +128,7 @@ ${doc.rawText.slice(0, 15000)}
             rawJsonText = data?.content?.[0]?.text;
         }
         else if (provider === 'openai') {
-            const model = config?.model || 'gpt-4o-mini';
+            const model = config?.model || DEFAULT_OPENAI_MODEL;
             const response = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -175,6 +178,25 @@ ${doc.rawText.slice(0, 15000)}
  * Dynamically evaluates free-form text or complex answers using AI reasoning.
  */
 export async function evaluateAnswerWithAi(question, userAnswer, config) {
+    if (question.type === 'open-ended') {
+        const profile = {
+            name: 'Learner',
+            xp: 0,
+            level: 1,
+            hearts: 5,
+            maxHearts: 5,
+            streak: 1,
+            lastActiveDate: '',
+            zenMode: false,
+            completedLessonsCount: 0,
+            masteredSkillsCount: 0,
+            achievements: [],
+            apiProvider: config?.provider,
+            apiKey: config?.apiKey,
+            activeModel: config?.model,
+        };
+        return evaluateOpenEndedAnswer(question, userAnswer, profile);
+    }
     const { provider, apiKey } = resolveProviderAndKey(config);
     // If no API key configured, use deterministic fuzzy matching
     if (!apiKey || !provider) {
@@ -192,7 +214,7 @@ export async function evaluateAnswerWithAi(question, userAnswer, config) {
                     : `Expected: ${cleanExpected}.`,
         };
     }
-    const prompt = `You are DuoCode's AI Tutor. Evaluate this learner's answer.
+    const prompt = `You are Jarvis CLI's AI Tutor. Evaluate this learner's answer.
 Question: ${question.prompt}
 Expected / Reference Answer: ${question.clozeAnswer || question.options?.[question.correctIndex || 0] || question.explanation}
 Explanation: ${question.explanation}
@@ -227,7 +249,7 @@ Grade leniently on core conceptual understanding. Return STRICT JSON:
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
                 body: JSON.stringify({
-                    model: 'gpt-4o-mini',
+                    model: DEFAULT_OPENAI_MODEL,
                     response_format: { type: 'json_object' },
                     messages: [{ role: 'user', content: prompt }],
                 }),

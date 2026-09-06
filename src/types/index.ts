@@ -1,6 +1,6 @@
 export type Pace = 'accelerated' | 'standard' | 'deep';
 
-export type QuestionType = 'multiple-choice' | 'cloze' | 'match' | 'scenario';
+export type QuestionType = 'multiple-choice' | 'cloze' | 'match' | 'scenario' | 'flashcard' | 'open-ended';
 
 export interface MatchPair {
   term: string;
@@ -15,6 +15,9 @@ export interface Question {
   correctIndex?: number;
   clozeAnswer?: string;
   matchPairs?: MatchPair[];
+  flashcardBack?: string;
+  rubric?: string;
+  minSentences?: number;
   explanation: string;
   hint?: string;
   xpReward: number;
@@ -54,6 +57,31 @@ export interface Course {
   summary: string;
 }
 
+export interface MicroConcept {
+  id: string;
+  order: number;
+  title: string;
+  digest: string;
+  analogy: string;
+  keyTakeaway: string;
+  flashcards: Array<{ term: string; explanation: string; hint?: string }>;
+  questions: Question[];
+}
+
+export interface TopicDecomposition {
+  topic: string;
+  overview: string;
+  concepts: MicroConcept[];
+}
+
+export interface AnswerEvaluation {
+  isCorrect: boolean;
+  scorePercentage: number;
+  feedback: string;
+  suggestedImprovement?: string;
+  xpEarned?: number;
+}
+
 export interface Achievement {
   id: string;
   name: string;
@@ -84,6 +112,49 @@ export interface UserProfile {
   };
   selectedAgent?: 'antigravity' | 'claude' | 'gemini' | 'codex' | 'autonomous';
   activeModel?: string;
+}
+
+export type ChatMessageRole = 'user' | 'assistant' | 'system';
+
+/** A durable, rendering-agnostic message in a Jarvis CLI thread. */
+export interface ChatMessage {
+  id: string;
+  role: ChatMessageRole;
+  text: string;
+  createdAt: string;
+}
+
+/**
+ * A locally persisted conversation. Keeping the full message list here lets
+ * any intro screen or alternate renderer decide how much history to show.
+ */
+export interface RecentThread {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+  provider?: string;
+  model?: string;
+  harness?: string;
+}
+
+/** Compact data suitable for a recent-thread picker or intro screen. */
+export interface RecentThreadSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  preview: string;
+  provider?: string;
+  model?: string;
+  harness?: string;
+}
+
+export interface RecentThreadHistory {
+  version: 1;
+  threads: RecentThread[];
 }
 
 export interface SpacedReviewItem {

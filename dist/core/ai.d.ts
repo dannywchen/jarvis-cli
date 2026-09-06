@@ -1,16 +1,13 @@
 import { ParsedDocument } from './parser.js';
-import { Course, Pace, Question } from '../types/index.js';
+import { Course, Pace, Question, AnswerEvaluation } from '../types/index.js';
+import { evaluateOpenEndedAnswer } from './topicEngine.js';
+export { evaluateOpenEndedAnswer };
 export interface LlmConfig {
     provider?: 'gemini' | 'anthropic' | 'openai';
     apiKey?: string;
     model?: string;
 }
-export interface AnswerEvaluation {
-    isCorrect: boolean;
-    scorePercentage: number;
-    feedback: string;
-    suggestedImprovement?: string;
-}
+export type { AnswerEvaluation };
 /**
  * Calls an external LLM API (Gemini, Claude, or OpenAI) if configured,
  * otherwise returns null to trigger the procedural heuristic engine.

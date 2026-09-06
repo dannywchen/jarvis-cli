@@ -1,9 +1,10 @@
 {
-  "name": "duocode",
+  "name": "jarvis",
   "version": "1.0.0",
-  "description": "Duolingo-gamified terminal learning CLI powered by Claude Code vibes",
+  "description": "Jarvis CLI: a terminal-native learning and agentic study harness",
   "type": "module",
   "bin": {
+    "jarvis": "./bin/jarvis.js",
     "duocode": "./bin/duocode.js"
   },
   "main": "dist/index.js",
@@ -11,7 +12,7 @@
     "build": "tsc",
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
-    "test": "node --test dist/test/*.js || tsx test/runTests.ts"
+    "test": "npm run build && tsx --test test/commands.test.ts test/recentThreads.test.ts test/gamification.test.ts && tsx test/cliAuth.test.ts && tsx test/duocode.test.ts && tsx test/topicEngine.test.ts"
   },
   "keywords": [
     "cli",

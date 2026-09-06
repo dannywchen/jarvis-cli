@@ -5,9 +5,10 @@ export declare const ALL_ACHIEVEMENTS: {
     description: string;
     icon: string;
 }[];
-export declare function calculateLevel(xp: number): number;
+export declare const LEVEL_THRESHOLDS: number[];
 export declare function getXpForLevel(level: number): number;
 export declare function getXpForNextLevel(level: number): number;
+export declare function calculateLevel(xp: number): number;
 export declare function getLevelProgress(xp: number): {
     currentLevel: number;
     nextLevel: number;

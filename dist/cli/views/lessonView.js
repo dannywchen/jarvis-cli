@@ -5,6 +5,7 @@ import { awardXp, checkNewAchievements } from '../../core/gamification.js';
 import { showConfetti, playChime, renderCombo, renderLevelUp } from '../effects.js';
 import { registerReviewItem } from '../../core/spacedRepetition.js';
 import { evaluateAnswerWithAi } from '../../core/ai.js';
+import { evaluateOpenEndedAnswer } from '../../core/topicEngine.js';
 import { detectAgentEnvironment } from '../../core/agentBridge.js';
 export async function runLesson(lesson, node, course, profile) {
     console.clear();
@@ -134,6 +135,80 @@ export async function runLesson(lesson, node, course, profile) {
             earnedXp = Math.max(10, Math.round((q.xpReward * evalResult.scorePercentage) / 100));
             aiFeedbackText = `Agent Feedback: "${evalResult.feedback}"`;
         }
+        else if (q.type === 'flashcard') {
+            console.log(boxen(chalk.hex('#38BDF8').bold('FLASHCARD FRONT\n\n') +
+                chalk.hex('#F8FAFC').bold(q.prompt.replace(/^Flashcard:\s*/i, '')) +
+                (q.hint ? chalk.hex('#64748B')(`\n\nHint: ${q.hint}`) : ''), {
+                padding: 1,
+                margin: { top: 0, bottom: 0 },
+                borderColor: 'cyan',
+                borderStyle: 'round',
+            }));
+            const reveal = await p.confirm({
+                message: 'Press Enter/Space to flip card and reveal back:',
+                initialValue: true,
+            });
+            if (p.isCancel(reveal)) {
+                p.outro(chalk.hex('#64748B')('Lesson cancelled.'));
+                return { success: false, xpEarned: totalXp };
+            }
+            console.log(boxen(chalk.hex('#10B981').bold('FLASHCARD BACK (EXPLANATION)\n\n') +
+                chalk.hex('#F8FAFC')(q.flashcardBack || q.explanation), {
+                padding: 1,
+                margin: { top: 0, bottom: 1 },
+                borderColor: 'green',
+                borderStyle: 'round',
+            }));
+            const confidence = await p.select({
+                message: 'Self-rate your recall confidence:',
+                options: [
+                    { value: '2', label: '2: Got it (Understood & retained)' },
+                    { value: '1', label: '1: Review again (Needs reinforcement)' },
+                ],
+            });
+            if (p.isCancel(confidence)) {
+                p.outro(chalk.hex('#64748B')('Lesson cancelled.'));
+                return { success: false, xpEarned: totalXp };
+            }
+            isCorrect = confidence === '2';
+            earnedXp = isCorrect ? q.xpReward : 5;
+            aiFeedbackText = isCorrect
+                ? 'Card mastered! Concept retained.'
+                : 'Added to your spaced review queue for reinforcement.';
+        }
+        else if (q.type === 'open-ended') {
+            const minSentences = q.minSentences || 1;
+            const sentenceReq = minSentences > 1 ? `Answer in ${minSentences}-3 sentences:` : 'Answer in 1-3 sentences:';
+            console.log(boxen(chalk.hex('#38BDF8').bold('OPEN-ENDED SYNTHESIS QUESTION\n\n') +
+                chalk.hex('#F8FAFC').bold(q.prompt) +
+                (q.hint ? chalk.hex('#64748B')(`\n\nHint: ${q.hint}`) : ''), {
+                padding: 1,
+                margin: { top: 0, bottom: 0 },
+                borderColor: 'cyan',
+                borderStyle: 'round',
+            }));
+            const input = await p.text({
+                message: sentenceReq,
+                placeholder: 'Explain the core mechanism in your own words...',
+                validate: (val) => {
+                    if (!val || val.trim().length === 0)
+                        return 'Please enter an answer.';
+                    return undefined;
+                },
+            });
+            if (p.isCancel(input)) {
+                p.outro(chalk.hex('#64748B')('Lesson cancelled.'));
+                return { success: false, xpEarned: totalXp };
+            }
+            const cleanInput = input.trim();
+            const spinner = p.spinner();
+            spinner.start(`✦ ${agentInfo.badge} analyzing answer with reasoning...`);
+            const evalResult = await evaluateOpenEndedAnswer(q, cleanInput, profile);
+            spinner.stop(`Evaluation complete (Score: ${evalResult.scorePercentage}%):`);
+            isCorrect = evalResult.isCorrect;
+            earnedXp = evalResult.xpEarned ?? Math.round(((q.xpReward || 25) * evalResult.scorePercentage) / 100);
+            aiFeedbackText = `Agent Feedback: "${evalResult.feedback}" (Score: ${evalResult.scorePercentage}%)${evalResult.suggestedImprovement ? `\n    Coaching: ${evalResult.suggestedImprovement}` : ''}`;
+        }
         else if (q.type === 'match') {
             console.log(chalk.bold(q.prompt));
             const pair = q.matchPairs?.[0];
@@ -172,19 +247,26 @@ export async function runLesson(lesson, node, course, profile) {
             if (aiFeedbackText) {
                 console.log(chalk.hex('#6EE7B7')(`    ${aiFeedbackText}`));
             }
-            console.log(chalk.hex('#94A3B8')(`    ${q.explanation}`));
+            if (q.type !== 'flashcard' && q.type !== 'open-ended') {
+                console.log(chalk.hex('#94A3B8')(`    ${q.explanation}`));
+            }
         }
         else {
             combo = 0;
-            if (!profile.zenMode) {
+            if (!profile.zenMode && q.type !== 'flashcard') {
                 profile.hearts = Math.max(0, profile.hearts - 1);
             }
-            console.log(chalk.hex('#F87171').bold(`\n  [FAIL] Incorrect. (-1 HP)`));
+            const failLabel = q.type === 'flashcard'
+                ? '\n  [REVIEW] Marked for spaced repetition.'
+                : '\n  [FAIL] Incorrect. (-1 HP)';
+            console.log(chalk.hex(q.type === 'flashcard' ? '#FBBF24' : '#F87171').bold(failLabel));
             if (aiFeedbackText) {
-                console.log(chalk.hex('#FCA5A5')(`    ${aiFeedbackText}`));
+                console.log(chalk.hex(q.type === 'flashcard' ? '#FDE68A' : '#FCA5A5')(`    ${aiFeedbackText}`));
             }
-            console.log(chalk.hex('#94A3B8')(`    ${q.explanation}`));
-            if (q.hint) {
+            if (q.type !== 'flashcard') {
+                console.log(chalk.hex('#94A3B8')(`    Model Answer: ${q.explanation}`));
+            }
+            if (q.hint && q.type !== 'flashcard') {
                 console.log(chalk.hex('#64748B')(`    Tip: ${q.hint}`));
             }
             // Add to Spaced Repetition queue

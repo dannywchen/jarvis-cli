@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { startDuoCodeRepl } from './cli/repl.js';
+import { startJarvisCliRepl } from './cli/repl.js';
 import { parseDocument } from './core/parser.js';
 import { generateCourse } from './core/generator.js';
 import {
@@ -13,22 +13,23 @@ import { renderRoadmap } from './cli/views/roadmapView.js';
 import { renderStats } from './cli/views/statsView.js';
 import { runLesson } from './cli/views/lessonView.js';
 import { runPracticeSession } from './cli/views/reviewView.js';
+import { decomposeTopicIntoConcepts } from './core/topicEngine.js';
 import { Pace } from './types/index.js';
 
 const program = new Command();
 
 program
-  .name('duocode')
-  .description('Duolingo-gamified terminal learning CLI powered by Claude Code vibes')
+  .name('jarvis')
+  .description('Jarvis CLI: a terminal-native learning and agentic study harness')
   .version('1.0.0');
 
 // Default action: Interactive REPL
 program
   .action(async () => {
     try {
-      await startDuoCodeRepl();
+      await startJarvisCliRepl();
     } catch (err: any) {
-      console.error(chalk.red(`\n[DuoCode Error] ${err.message}`));
+      console.error(chalk.red(`\n[Jarvis CLI Error] ${err.message}`));
       process.exit(1);
     }
   });
@@ -40,7 +41,7 @@ program
   .option('-p, --pace <pace>', 'Roadmap pace: accelerated, standard, or deep', 'standard')
   .action(async (file, options) => {
     try {
-      console.log(chalk.cyan(`\n✦ DuoCode Ingestion: Reading "${file}"...`));
+      console.log(chalk.cyan(`\n✦ Jarvis CLI Ingestion: Reading "${file}"...`));
       const doc = await parseDocument(file);
       const pace = (['accelerated', 'standard', 'deep'].includes(options.pace)
         ? options.pace
@@ -56,7 +57,37 @@ program
 
       console.log(chalk.green.bold(`\n✓ Roadmap created successfully: "${course.title}" (${course.nodes.length} nodes)`));
       renderRoadmap(course);
-      console.log(chalk.yellow(`Run 'duocode learn' or 'duocode' to start your first lesson!\n`));
+      console.log(chalk.yellow(`Run 'jarvis learn' or 'jarvis' to start your first lesson!\n`));
+    } catch (err: any) {
+      console.error(chalk.red(`\nError: ${err.message}\n`));
+      process.exit(1);
+    }
+  });
+
+// Command: topic <topic>
+program
+  .command('topic <topic...>')
+  .description('Decompose any technical topic into bite-sized Duolingo-style micro-concepts and learn')
+  .action(async (topicParts) => {
+    const topic = Array.isArray(topicParts) ? topicParts.join(' ') : topicParts;
+    try {
+      console.log(chalk.cyan(`\n✦ Decomposing topic: "${topic}" into progressive micro-concepts...`));
+      const profile = await loadUserProfile();
+      const result = await decomposeTopicIntoConcepts(topic, profile);
+      await saveCourse(result.course);
+      profile.activeCourseId = result.course.id;
+      await saveUserProfile(profile);
+
+      console.log(chalk.green.bold(`\n✓ Roadmap created successfully: "${result.topic}" (${result.concepts.length} micro-concepts)`));
+      renderRoadmap(result.course);
+      console.log(chalk.yellow(`Starting first lesson...\n`));
+      const activeNode = result.course.nodes[0];
+      const lesson = activeNode.lessons[0];
+      const lessonRes = await runLesson(lesson, activeNode, result.course, profile);
+      if (lessonRes.success) {
+        await saveCourse(result.course);
+        await saveUserProfile(profile);
+      }
     } catch (err: any) {
       console.error(chalk.red(`\nError: ${err.message}\n`));
       process.exit(1);
@@ -70,7 +101,7 @@ program
   .action(async () => {
     const profile = await loadUserProfile();
     if (!profile.activeCourseId) {
-      console.log(chalk.yellow('\nNo active course found. Run "duocode load <file>" to create one!\n'));
+      console.log(chalk.yellow('\nNo active course found. Run "jarvis load <file>" to create one!\n'));
       return;
     }
     const course = await loadCourse(profile.activeCourseId);
@@ -88,7 +119,7 @@ program
   .action(async () => {
     const profile = await loadUserProfile();
     if (!profile.activeCourseId) {
-      console.log(chalk.yellow('\nNo active course found. Run "duocode load <file>" first!\n'));
+      console.log(chalk.yellow('\nNo active course found. Run "jarvis load <file>" first!\n'));
       return;
     }
     const course = await loadCourse(profile.activeCourseId);
@@ -132,7 +163,7 @@ program
 // Command: tutor
 program
   .command('tutor')
-  .description('Launch conversational agentic AI tutoring session with Byte the Cyber-Owl')
+  .description('Launch Jarvis CLI conversational tutoring session')
   .action(async () => {
     const profile = await loadUserProfile();
     let course = null;
@@ -192,5 +223,13 @@ agent
     });
   });
 
-program.parse(process.argv);
+agent
+  .command('decompose <topic...>')
+  .description('Decompose a topic into micro-concepts in JSON for agent tutoring')
+  .action(async (topicParts) => {
+    const topic = Array.isArray(topicParts) ? topicParts.join(' ') : topicParts;
+    const { handleAgentDecompose } = await import('./cli/agentMode.js');
+    await handleAgentDecompose(topic);
+  });
 
+program.parse(process.argv);

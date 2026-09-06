@@ -1,5 +1,6 @@
 import { parseDocument } from '../core/parser.js';
 import { generateCourse } from '../core/generator.js';
+import { decomposeTopicIntoConcepts } from '../core/topicEngine.js';
 import { loadUserProfile, saveUserProfile, loadCourse, saveCourse, } from '../core/storage.js';
 import { awardXp, checkNewAchievements, updateStreak } from '../core/gamification.js';
 import { evaluateAnswerWithAi } from '../core/ai.js';
@@ -161,5 +162,37 @@ export async function handleAgentSubmitAnswer(options) {
         feedback: evalResult.feedback,
         suggestedImprovement: evalResult.suggestedImprovement,
         unlockedAchievements: achievements,
+    }, null, 2));
+}
+export async function handleAgentDecompose(topic) {
+    const profile = await loadUserProfile();
+    const result = await decomposeTopicIntoConcepts(topic, profile);
+    await saveCourse(result.course);
+    profile.activeCourseId = result.course.id;
+    await saveUserProfile(profile);
+    console.log(JSON.stringify({
+        success: true,
+        topic: result.topic,
+        overview: result.overview,
+        courseId: result.course.id,
+        conceptCount: result.concepts.length,
+        concepts: result.concepts.map((c) => ({
+            id: c.id,
+            order: c.order,
+            title: c.title,
+            digest: c.digest,
+            analogy: c.analogy,
+            keyTakeaway: c.keyTakeaway,
+            flashcards: c.flashcards,
+            questions: c.questions.map((q) => ({
+                id: q.id,
+                type: q.type,
+                prompt: q.prompt,
+                options: q.options,
+                hint: q.hint,
+                xpReward: q.xpReward,
+                minSentences: q.minSentences,
+            })),
+        })),
     }, null, 2));
 }

@@ -13,7 +13,7 @@ import { calculateNextReview } from '../src/core/spacedRepetition.js';
 import { UserProfile, SpacedReviewItem } from '../src/types/index.js';
 
 async function runTests() {
-  console.log('🧪 Starting DuoCode Test Suite...\n');
+  console.log('🧪 Starting Jarvis CLI Test Suite...\n');
 
   // Test 1: Parser - Markdown
   console.log('▶ Test 1: Ingesting Markdown document...');
@@ -58,7 +58,12 @@ async function runTests() {
   // Test 5: Gamification - Leveling & XP
   console.log('▶ Test 5: Gamification Engine (XP, Levels, Streaks)...');
   assert.strictEqual(calculateLevel(0), 1);
-  assert.strictEqual(calculateLevel(160), 3);
+  assert.strictEqual(calculateLevel(99), 1);
+  assert.strictEqual(calculateLevel(100), 2);
+  assert.strictEqual(calculateLevel(160), 2);
+  assert.strictEqual(calculateLevel(250), 3);
+  assert.strictEqual(calculateLevel(500), 4);
+  assert.strictEqual(calculateLevel(850), 5);
 
   const profile: UserProfile = {
     name: 'Ada Lovelace',

@@ -1,8 +1,8 @@
-# DuoCode 🦉⚡
+# Jarvis CLI 🦉⚡
 
 > **Duolingo-gamified learning meets the keyboard-driven polish of Claude Code.**
 
-DuoCode is a terminal-native learning game and study accelerator. Feed in any PDF, research paper, textbook chapter, or markdown note. DuoCode parses the material, synthesizes core mental models, and builds a gamified skill tree with bite-sized lessons, interactive drills, combo multipliers, streaks, hearts, and spaced repetition.
+Jarvis CLI is a terminal-native learning game and study accelerator. Feed in any PDF, research paper, textbook chapter, or markdown note. Jarvis CLI parses the material, synthesizes core mental models, and builds a gamified skill tree with bite-sized lessons, interactive drills, combo multipliers, streaks, hearts, and spaced repetition.
 
 ```
    ___    ___              ____          __
@@ -11,7 +11,7 @@ DuoCode is a terminal-native learning game and study accelerator. Feed in any PD
 /____/\_,_/____/\___/\___/  \___/\___/\_,_/\__/
 
       ▲   ▲
-     (o   o)    Byte the Cyber-Owl
+     (o   o)    Jarvis the Cyber-Owl
       > ( v ) <    Gamified Terminal Learning Accelerator
        /" "\
 
@@ -64,7 +64,7 @@ DuoCode is a terminal-native learning game and study accelerator. Feed in any PD
 ### Installation & Setup
 
 ```bash
-cd /Users/dannywchen/Documents/GitHub/duocode
+cd /Users/dannywchen/Documents/GitHub/jarvis-cli
 npm install
 npm run build
 ```
@@ -72,7 +72,7 @@ npm run build
 ### Launch Interactive Hub
 
 ```bash
-node bin/duocode.js
+node bin/jarvis.js
 # or
 npm start
 ```
@@ -83,32 +83,32 @@ npm start
 
 ```bash
 # Ingest any PDF or document and generate a roadmap (default: standard pace)
-node bin/duocode.js load ./demo/quantum-computing.pdf
+node bin/jarvis.js load ./demo/quantum-computing.pdf
 
 # Speedrun a document with accelerated pace
-node bin/duocode.js load ./demo/quantum-computing.pdf --pace accelerated
+node bin/jarvis.js load ./demo/quantum-computing.pdf --pace accelerated
 
 # Comprehensive deep-dive with boss challenges
-node bin/duocode.js load ./demo/quantum-computing.pdf --pace deep
+node bin/jarvis.js load ./demo/quantum-computing.pdf --pace deep
 
 # Resume learning your next active lesson
-node bin/duocode.js learn
+node bin/jarvis.js learn
 
 # View visual skill tree and roadmap progress
-node bin/duocode.js roadmap
+node bin/jarvis.js roadmap
 
 # View profile stats, level progress bar, and badge showcase
-node bin/duocode.js stats
+node bin/jarvis.js stats
 
 # Practice overdue spaced-repetition concepts & refill hearts
-node bin/duocode.js practice
+node bin/jarvis.js practice
 ```
 
 ---
 
 ## 🔑 Production-Level Authentication & Model Switching
 
-DuoCode connects directly to production LLM APIs with real-time credential validation:
+Jarvis CLI connects directly to production LLM APIs with real-time credential validation:
 
 ```bash
 /auth     # Open authentication manager & live key validator
@@ -119,61 +119,62 @@ DuoCode connects directly to production LLM APIs with real-time credential valid
 
 | Provider | Models | Auth Method |
 | :--- | :--- | :--- |
-| **Google Gemini** | `gemini-2.0-flash`, `gemini-1.5-pro`, `gemini-1.5-flash` | `GEMINI_API_KEY` (aistudio.google.com/app/apikey) |
-| **OpenAI / ChatGPT** | `gpt-4o`, `gpt-4o-mini`, `o3-mini` | `OPENAI_API_KEY` (platform.openai.com/api-keys) |
+| **Google Gemini** | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.5-flash`, `gemini-3.1-flash-lite` | Google Code Assist OAuth or `GEMINI_API_KEY` (aistudio.google.com/apikey) |
+| **OpenAI / ChatGPT** | `gpt-5.6-luna` (default, high reasoning), `gpt-4o`, `gpt-4o-mini`, `o3-mini` | `OPENAI_API_KEY` (platform.openai.com/api-keys) or ChatGPT Codex CLI |
 | **Anthropic Claude** | `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-20241022`, `claude-3-opus` | `ANTHROPIC_API_KEY` (console.anthropic.com) |
 
-When you enter a key, DuoCode performs a live test ping against the provider's endpoint to ensure valid connectivity, saving verified credentials in `~/.duocode/profile.json`.
+When you enter a key, Jarvis CLI performs a live test ping against the provider's endpoint to ensure valid connectivity. New data lives at `~/.jarvis-cli`; existing `~/.duocode` profiles and courses are read as a non-destructive legacy fallback.
 
 ---
 
 ## 🤖 Agentic AI Integration & Skill
 
-DuoCode is built from the ground up for agentic collaboration with **Google Antigravity**, **Claude Code**, and **ChatGPT/Codex**.
+Jarvis CLI is built from the ground up for agentic collaboration with **Google Antigravity**, **Claude Code**, and **ChatGPT/Codex**.
 
 ### 1. Antigravity Skill Registered
-DuoCode is installed as a global skill at [`~/.gemini/config/skills/duocode/SKILL.md`](file:///Users/dannywchen/.gemini/config/skills/duocode/SKILL.md).
+Existing Antigravity installations may still reference the legacy skill path [`~/.gemini/config/skills/duocode/SKILL.md`](file:///Users/dannywchen/.gemini/config/skills/duocode/SKILL.md); the product and executable are now Jarvis CLI / `jarvis`.
 Whenever you are chatting with Antigravity, you can say:
-- *"DuoCode: Teach me this PDF: `./paper.pdf`"*
+- *"Jarvis CLI: Teach me this PDF: `./paper.pdf`"*
 - *"Quiz me on quantum gates and track my XP"*
-- *"Check my DuoCode streak and stats"*
+- *"Check my Jarvis CLI streak and stats"*
 - *"Start an interactive tutoring session on my active course"*
 
 Antigravity autonomously drives the CLI, parses the material, quizzes you conversationally, and tracks your progress and streaks.
 
-### 2. Conversational AI Tutor ("Byte the Cyber-Owl")
+### 2. Conversational AI Tutor ("Jarvis the Cyber-Owl")
 Run:
 ```bash
-node bin/duocode.js tutor
+node bin/jarvis.js tutor
 ```
-Launches an interactive, conversational voice/text study session with Byte the Cyber-Owl 🦉. Ask questions, request intuitive analogies, or get challenged with active recall questions directly in the terminal, earning curiosity XP as you study.
+Launches an interactive, conversational voice/text study session with Jarvis the Cyber-Owl 🦉. Ask questions, request intuitive analogies, or get challenged with active recall questions directly in the terminal, earning curiosity XP as you study.
 
-### 3. Machine-Readable Agent Commands (`duocode agent ...`)
-Agents can query and manipulate DuoCode state programmatically via structured JSON:
+### 3. Machine-Readable Agent Commands (`jarvis agent ...`)
+Agents can query and manipulate Jarvis CLI state programmatically via structured JSON:
 
 ```bash
 # Output full user profile, active course, and due review cards
-node bin/duocode.js agent status
+node bin/jarvis.js agent status
 
 # Ingest a PDF and return the generated course hierarchy in JSON
-node bin/duocode.js agent ingest ./demo/quantum-computing.pdf --pace standard
+node bin/jarvis.js agent ingest ./demo/quantum-computing.pdf --pace standard
 
 # Fetch current lesson mental models, takeaways, and questions
-node bin/duocode.js agent lesson
+node bin/jarvis.js agent lesson
 
 # Submit a learner's answer and get AI evaluation, XP gains, and badge updates
-node bin/duocode.js agent submit -q <questionId> -a "<answer>"
+node bin/jarvis.js agent submit -q <questionId> -a "<answer>"
 ```
 
 ---
 
 ## 🧠 AI Providers & Offline Mode
 
-DuoCode is built to be **100% functional offline out of the box** via its built-in procedural heuristic extractor:
+Jarvis CLI is built to be **100% functional offline out of the box** via its built-in procedural heuristic extractor:
 - Ingests documents, extracts definitions, context sentences, and creates structured curriculums with zero API keys required.
 
 Optionally, you can connect an LLM for dynamic curriculum generation:
-- Set `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY` in your environment, or configure it interactively inside the CLI (`duocode > Settings > Configure AI Provider`).
+- Set `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY` in your environment, or configure it interactively inside the CLI with `/auth`.
+- For browser-based Google OAuth, copy `.env.example` to `.env` and set `GEMINI_CLIENT_ID` and `GEMINI_CLIENT_SECRET` locally. `.env` is ignored by Git and is never included in pushes.
 
 ---
 
@@ -181,7 +182,7 @@ Optionally, you can connect an LLM for dynamic curriculum generation:
 
 ```bash
 # Run automated test suite
-npx tsx test/duocode.test.ts
+npm test
 
 # Run lesson simulation test
 npx tsx test/lesson-simulation.test.ts

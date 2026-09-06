@@ -8,11 +8,11 @@ export interface AgentDetection {
     hasLiveLlm: boolean;
 }
 /**
- * Detects whether DuoCode is running inside Antigravity, Claude Code, Codex, or standalone.
+ * Detects whether Jarvis CLI is running inside Antigravity, Claude Code, Codex, or standalone.
  */
 export declare function detectAgentEnvironment(): AgentDetection;
 /**
- * Chat with Byte using the active agentic backend or live LLM.
+ * Chat with Jarvis using the active agentic backend or live LLM.
  */
 export declare function chatWithAgentTutor(userQuery: string, profile: UserProfile, activeCourse?: Course | null): Promise<{
     text: string;

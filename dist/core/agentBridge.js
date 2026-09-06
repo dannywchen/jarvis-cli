@@ -1,5 +1,5 @@
 /**
- * Detects whether DuoCode is running inside Antigravity, Claude Code, Codex, or standalone.
+ * Detects whether Jarvis CLI is running inside Antigravity, Claude Code, Codex, or standalone.
  */
 export function detectAgentEnvironment() {
     if (process.env.ANTIGRAVITY_AGENT || process.env.ANTIGRAVITY_CONVERSATION_ID || process.env.ANTIGRAVITY_SOURCE_METADATA) {
@@ -25,7 +25,7 @@ export function detectAgentEnvironment() {
             env: 'codex',
             name: 'OpenAI Codex Agent',
             badge: 'Codex Agent Bridge',
-            description: 'GPT-4o conversational reasoning engine',
+            description: 'GPT-5.6 Luna high-reasoning engine',
             hasLiveLlm: true,
         };
     }
@@ -40,14 +40,14 @@ export function detectAgentEnvironment() {
     }
     return {
         env: 'standalone',
-        name: 'DuoCode Autonomous Engine',
-        badge: 'DuoCode Engine',
+        name: 'Jarvis CLI Autonomous Engine',
+        badge: 'Jarvis CLI Engine',
         description: 'Procedural synthesizer with zero dependencies',
         hasLiveLlm: false,
     };
 }
 /**
- * Chat with Byte using the active agentic backend or live LLM.
+ * Chat with Jarvis using the active agentic backend or live LLM.
  */
 export async function chatWithAgentTutor(userQuery, profile, activeCourse) {
     const agentInfo = detectAgentEnvironment();
@@ -56,8 +56,8 @@ export async function chatWithAgentTutor(userQuery, profile, activeCourse) {
     const contextPrompt = activeCourse
         ? `Current Active Course: "${activeCourse.title}"\nPace: ${activeCourse.pace}\nCourse Summary: ${activeCourse.summary}`
         : 'No course loaded yet.';
-    const systemInstructions = `You are Byte, the expert AI tutor in DuoCode.
-DuoCode is an OpenCode-styled terminal learning tool.
+    const systemInstructions = `You are Jarvis, the expert AI tutor in Jarvis CLI.
+Jarvis CLI is a Claude Code-inspired terminal learning tool.
 User Profile: Level ${profile.level}, ${profile.xp} XP, ${profile.streak}-day streak, ${profile.hearts}/${profile.maxHearts} HP.
 Context:
 ${contextPrompt}
@@ -95,7 +95,7 @@ Guidelines:
     const queryLower = userQuery.toLowerCase();
     let synthesizedAnswer = '';
     if (queryLower.includes('overriding') && queryLower.includes('overloading')) {
-        synthesizedAnswer = `Byte: Method Overriding vs Overloading in Java:
+        synthesizedAnswer = `Jarvis: Method Overriding vs Overloading in Java:
 
 - Method Overloading: Multiple methods within the same class sharing the identical name but differing in parameter signatures (types, count, or order). Resolved at compile-time (Static Binding).
   Example: add(int a, int b) vs add(double a, double b)
@@ -109,7 +109,7 @@ Analogy: Overloading is having multiple attachments for a vacuum; Overriding is 
 Active Recall Drill: Why can method overloading not be achieved merely by altering the return type?`;
     }
     else if (queryLower.includes('constructor') || queryLower.includes('constructors')) {
-        synthesizedAnswer = `Byte: Constructors are initialization subroutines for objects:
+        synthesizedAnswer = `Jarvis: Constructors are initialization subroutines for objects:
 
 When executing 'new Car("Model 3")', the JVM:
 1. Allocates raw memory on the Heap for instance state.
@@ -120,7 +120,7 @@ Core Rule: If no constructor is declared, Java injects a default no-arg construc
 Analogy: A constructor is the factory calibration technician configuring hardware before shipping.`;
     }
     else if (queryLower.includes('interface') || queryLower.includes('abstract')) {
-        synthesizedAnswer = `Byte: Interface vs Abstract Class architectural trade-offs:
+        synthesizedAnswer = `Jarvis: Interface vs Abstract Class architectural trade-offs:
 
 - Interface: Pure behavioral contract ("can-do"). Supports multiple implementation inheritance. Used for decoupling distinct subsystems (e.g. AutoCloseable, Comparable).
 - Abstract Class: Shared identity and partial implementation ("is-a"). Used when closely related subclasses share mutable state and common helper logic.
@@ -129,7 +129,7 @@ Core Rule: Prefer interfaces for API contracts and loose coupling; use abstract 
 Analogy: An interface is a standardized power outlet; an abstract class is a partially assembled vehicle chassis.`;
     }
     else {
-        synthesizedAnswer = `Byte: Concept Analysis:
+        synthesizedAnswer = `Jarvis: Concept Analysis:
 In ${activeCourse ? activeCourse.title : 'software engineering'}, the guiding principle is maintaining clean encapsulation and unambiguous invariants.
 
 Key focus areas:

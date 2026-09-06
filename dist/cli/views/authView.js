@@ -1,9 +1,8 @@
 import chalk from 'chalk';
 import * as p from '@clack/prompts';
-import { exec } from 'child_process';
 import { saveUserProfile } from '../../core/storage.js';
-import { validateApiKey, POPULAR_MODELS } from '../../core/liveClient.js';
-import { scanDetectedCliSessions, startGoogleOAuthServer } from '../../core/cliAuth.js';
+import { validateApiKey, sendLiveLlmPrompt, normalizeModelId, POPULAR_MODELS } from '../../core/liveClient.js';
+import { getAntigravityCliPath, runAntigravityCliLogin, scanDetectedCliSessions } from '../../core/cliAuth.js';
 export async function runAuthSetup(profile) {
     console.clear();
     console.log('\n  ' + chalk.hex('#F8FAFC').bold('[AUTHENTICATION & CLI HARNESS CONNECT]'));
@@ -11,20 +10,20 @@ export async function runAuthSetup(profile) {
     const detected = scanDetectedCliSessions();
     const options = [];
     // Add detected CLI harnesses
-    for (const session of detected) {
-        const isCurrent = profile.apiProvider === session.provider;
+    for (const session of detected.filter((item) => item.hasValidSession)) {
         options.push({
-            value: `cli_${session.provider}_${session.harness}`,
+            value: `cli:${session.harness}`,
             label: `${chalk.hex('#10B981')('●')} Use Local ${session.name} ${chalk.hex('#94A3B8')(`(${session.email})`)}`,
-            hint: `Default model: ${session.defaultModel} · No key entry required`,
+            hint: `Default model: ${session.defaultModel}${session.harness === 'codex-cli' ? ' · reasoning: high' : ''} · No key entry required`,
         });
     }
-    // Add browser OAuth flow option (OpenCode style)
-    options.push({
-        value: 'google_oauth_browser',
-        label: '→ Browser OAuth Login (Google / Gemini CLI flow)',
-        hint: 'Opens browser to sign in via Google and capture CLI tokens',
-    });
+    if (getAntigravityCliPath() !== 'agy') {
+        options.push({
+            value: 'antigravity_cli_login',
+            label: '→ Reconnect with official Antigravity CLI',
+            hint: 'Opens the supported Antigravity login flow; run /auth there if needed',
+        });
+    }
     // Add manual API key configuration
     options.push({
         value: 'manual_api_key',
@@ -43,43 +42,42 @@ export async function runAuthSetup(profile) {
         return false;
     }
     // Handling detected local CLI selection
-    if (typeof selected === 'string' && selected.startsWith('cli_')) {
-        const parts = selected.split('_');
-        const provider = parts[1];
-        const session = detected.find((s) => s.provider === provider);
-        profile.apiProvider = provider;
-        profile.activeModel = session?.defaultModel || POPULAR_MODELS[provider][0].id;
-        await saveUserProfile(profile);
-        p.outro(chalk.hex('#10B981')(`✓ Connected to ${session?.name || provider.toUpperCase()} (${session?.email || 'Authenticated'})\n  Active Model: ${profile.activeModel}`));
-        return true;
-    }
-    // Handling Google OAuth browser flow
-    if (selected === 'google_oauth_browser') {
-        const spinner = p.spinner();
-        spinner.start('Starting local OAuth callback listener on port 51121...');
-        try {
-            const { authUrl, waitForCredentials } = await startGoogleOAuthServer();
-            spinner.stop(chalk.hex('#38BDF8')('✦ Local callback server listening.'));
-            console.log('\n  ' + chalk.hex('#F8FAFC')('Open the following link in your browser to sign in:'));
-            console.log('  ' + chalk.hex('#38BDF8').underline(authUrl) + '\n');
-            // Attempt to open browser automatically on macOS
-            if (process.platform === 'darwin') {
-                exec(`open "${authUrl}"`);
-            }
-            spinner.start('Waiting for Google authorization callback in browser...');
-            const creds = await waitForCredentials();
-            spinner.stop(chalk.hex('#10B981')(`✓ Google credentials captured for ${creds.email}!`));
-            profile.apiProvider = 'gemini';
-            profile.activeModel = 'gemini-2.0-flash';
-            await saveUserProfile(profile);
-            p.outro(chalk.hex('#10B981')(`Antigravity / Gemini CLI session active with ${profile.activeModel} (latest)`));
-            return true;
-        }
-        catch (err) {
-            spinner.stop(chalk.hex('#EF4444')(`OAuth flow failed: ${err.message}`));
-            await p.text({ message: 'Press Enter to continue...' });
+    if (typeof selected === 'string' && selected.startsWith('cli:')) {
+        const harness = selected.slice('cli:'.length);
+        const session = detected.find((item) => item.harness === harness && item.hasValidSession);
+        if (!session) {
+            p.outro(chalk.hex('#EF4444')('That local session is no longer available. Run /auth and choose another method.'));
             return false;
         }
+        const provider = session.provider;
+        profile.apiProvider = provider;
+        profile.activeModel = session.defaultModel || POPULAR_MODELS[provider][0].id;
+        await saveUserProfile(profile);
+        p.outro(chalk.hex('#10B981')(`✓ Connected to ${session.name} (${session.email || 'Authenticated'})\n  Active Model: ${profile.activeModel}\n  Run /model at any time to choose a different model.`));
+        return true;
+    }
+    if (selected === 'antigravity_cli_login') {
+        console.log('\n  Antigravity CLI is starting. Run /auth in that session if Google asks you to reconnect, then exit it to return here.\n');
+        const result = await runAntigravityCliLogin();
+        if (!result.success) {
+            p.outro(chalk.hex('#EF4444')(result.error || 'Antigravity CLI authentication did not complete.'));
+            return false;
+        }
+        const verification = await sendLiveLlmPrompt({
+            provider: 'gemini',
+            model: 'gemini-3.8-flash',
+            harness: 'antigravity-cli',
+            prompt: 'Reply with exactly OK',
+        });
+        if (verification.error) {
+            p.outro(chalk.hex('#EF4444')(`Antigravity reconnect did not verify: ${verification.error}`));
+            return false;
+        }
+        profile.apiProvider = 'gemini';
+        profile.activeModel = 'gemini-3.8-flash';
+        await saveUserProfile(profile);
+        p.outro(chalk.hex('#10B981')('✓ Antigravity CLI session verified and connected.'));
+        return true;
     }
     // Handling manual API key entry
     if (selected === 'manual_api_key') {
@@ -129,9 +127,10 @@ export async function runAuthSetup(profile) {
 export async function runModelPicker(profile) {
     const currentProvider = profile.apiProvider || 'gemini';
     const models = POPULAR_MODELS[currentProvider] || POPULAR_MODELS.gemini;
+    const currentModel = normalizeModelId(currentProvider, profile.activeModel);
     const options = models.map((m) => ({
         value: m.id,
-        label: `${m.id === profile.activeModel ? '● ' : '○ '}${m.name}`,
+        label: `${m.id === currentModel ? '● ' : '○ '}${m.name}`,
         hint: m.description,
     }));
     const selected = await p.select({

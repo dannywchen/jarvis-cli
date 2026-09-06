@@ -1,20 +1,18 @@
-import { sendLiveLlmPrompt, POPULAR_MODELS } from './liveClient.js';
+import { sendLiveLlmPrompt, normalizeModelId, DEFAULT_OPENAI_REASONING_EFFORT } from './liveClient.js';
 import { scanDetectedCliSessions, getValidGoogleAccessToken } from './cliAuth.js';
 export function resolveActiveCredentials(profile) {
     const detected = scanDetectedCliSessions();
     const provider = (profile.apiProvider || 'gemini');
-    const defaultModel = POPULAR_MODELS[provider]?.[0]?.id || 'gemini-3.8-flash-tiered';
-    const model = profile.activeModel || defaultModel;
+    const model = normalizeModelId(provider, profile.activeModel);
     let apiKey = null;
     let authToken = null;
     let harness = 'api-key';
-    let harnessName = 'Direct API Key';
+    let harnessName = 'Direct API';
     let connectedAccount = undefined;
     // Find matching CLI session if available
-    const matchingSession = detected.find((s) => s.provider === provider);
     if (provider === 'gemini') {
         apiKey = profile.apiKeys?.gemini || profile.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || null;
-        const googleCli = detected.find((s) => s.harness === 'antigravity-cli' || s.harness === 'gemini-cli');
+        const googleCli = detected.find((s) => s.hasValidSession && (s.harness === 'antigravity-cli' || s.harness === 'gemini-cli'));
         if (googleCli) {
             harness = googleCli.harness;
             harnessName = googleCli.name;
@@ -24,7 +22,8 @@ export function resolveActiveCredentials(profile) {
     }
     else if (provider === 'openai') {
         apiKey = profile.apiKeys?.openai || process.env.OPENAI_API_KEY || null;
-        const codexCli = detected.find((s) => s.harness === 'codex-cli');
+        harnessName = 'OpenAI API';
+        const codexCli = detected.find((s) => s.hasValidSession && s.harness === 'codex-cli');
         if (codexCli) {
             harness = codexCli.harness;
             harnessName = codexCli.name;
@@ -34,7 +33,8 @@ export function resolveActiveCredentials(profile) {
     }
     else if (provider === 'anthropic') {
         apiKey = profile.apiKeys?.anthropic || process.env.ANTHROPIC_API_KEY || null;
-        const claudeCli = detected.find((s) => s.harness === 'claude-cli');
+        harnessName = 'Anthropic API';
+        const claudeCli = detected.find((s) => s.hasValidSession && s.harness === 'claude-cli');
         if (claudeCli) {
             harness = claudeCli.harness;
             harnessName = claudeCli.name;
@@ -66,9 +66,13 @@ export async function queryActiveAgent(query, profile, activeCourse) {
             activeToken = refreshed.token;
         }
     }
-    if (!creds.apiKey && !activeToken && !(creds.provider === 'openai' && creds.harness === 'codex-cli')) {
+    const canUseAntigravityCli = creds.provider === 'gemini' && creds.harness === 'antigravity-cli';
+    if (!creds.apiKey && !activeToken && !canUseAntigravityCli && !(creds.provider === 'openai' && creds.harness === 'codex-cli')) {
+        const authHint = creds.provider === 'openai'
+            ? "Run '/auth' to connect ChatGPT Codex CLI or configure an OpenAI API key."
+            : `Run '/auth' to connect ${creds.provider === 'gemini' ? 'Google Code Assist' : 'Claude Code'} or configure an API key.`;
         return {
-            text: `[Authentication Required]\nNo live credentials detected for ${creds.provider.toUpperCase()}.\nType your question, run '/auth' to connect Antigravity CLI or enter a key.`,
+            text: `[Jarvis CLI] Authentication required\nNo active credentials detected for ${creds.provider.toUpperCase()} (${creds.harnessName}).\n${authHint}`,
             xpAwarded: 0,
             provider: creds.provider,
             model: creds.model,
@@ -77,7 +81,7 @@ export async function queryActiveAgent(query, profile, activeCourse) {
             requiresAuth: true,
         };
     }
-    const systemInstructions = `You are DuoCode's Agentic AI engine powered by ${creds.model} via ${creds.harnessName}.
+    const systemInstructions = `You are Jarvis CLI's agentic AI engine powered by ${creds.model} via ${creds.harnessName}.
 Active Course: ${activeCourse ? `"${activeCourse.title}" (${activeCourse.summary})` : 'General Technical Development'}.
 User Profile: Level ${profile.level}, ${profile.xp} XP, ${profile.streak}d streak.
 
@@ -94,10 +98,11 @@ Instructions:
         harness: creds.harness,
         prompt: query,
         systemPrompt: systemInstructions,
+        reasoningEffort: creds.provider === 'openai' ? DEFAULT_OPENAI_REASONING_EFFORT : undefined,
     });
     if (result.error) {
         return {
-            text: `[${creds.harnessName} Error] ${result.error}\nRun '/model' to select another model (e.g. Gemini 3.8 Flash, 3.7 Flash, 3.1 Flash Lite) or '/auth' to switch harness.`,
+            text: `[${creds.harnessName} Error] ${result.error}`,
             xpAwarded: 0,
             provider: creds.provider,
             model: creds.model,
@@ -106,13 +111,133 @@ Instructions:
             error: result.error,
         };
     }
+    const relevance = evaluateQueryRelevance(query, activeCourse);
     return {
         text: result.text,
-        xpAwarded: 10,
+        xpAwarded: relevance.xpAwarded,
+        relevanceReason: relevance.relevanceReason,
         provider: creds.provider,
         model: creds.model,
         harnessName: creds.harnessName,
         connectedAccount: creds.connectedAccount,
+    };
+}
+function isKnownTechnicalTerm(text) {
+    return /\b(?:python|javascript|typescript|rust|c\+\+|golang|java|docker|kubernetes|linux|git|sql|react|node|html|css|algorithm|qubit|quantum|compiler|kernel|database|pointer|recursion)\b/i.test(text);
+}
+function extractSubjectTopic(text) {
+    const clean = text
+        .replace(/^what\s+(?:is|are)\s+(?:an?|the)?\s*/i, '')
+        .replace(/^how\s+(?:does|do|can|to)\s+(?:an?|the)?\s*/i, '')
+        .replace(/^why\s+(?:does|is|do)\s+(?:an?|the)?\s*/i, '')
+        .replace(/^explain\s+(?:how|why|the|an?)?\s*/i, '')
+        .replace(/^compare\s+/i, '')
+        .replace(/^can\s+you\s+(?:explain|tell\s+me\s+about)\s+/i, '')
+        .replace(/[?!.:;]+$/, '')
+        .trim();
+    if (/quantum\s+superposition/i.test(clean))
+        return 'quantum superposition';
+    if (/superposition/i.test(clean))
+        return 'quantum superposition';
+    if (/qubit/i.test(clean))
+        return 'qubit mechanics';
+    if (/interface\s+(?:vs|and)\s+abstract\s+class/i.test(clean))
+        return 'interface vs abstract class';
+    if (/data\s+races?/i.test(clean))
+        return 'data race prevention';
+    if (/raft\s+consensus/i.test(clean))
+        return 'raft consensus';
+    if (/borrow\s+checker/i.test(clean))
+        return 'borrow checker';
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length <= 3) {
+        return clean.toLowerCase();
+    }
+    return words.slice(0, 3).join(' ').toLowerCase();
+}
+/**
+ * Agentic query relevance evaluator:
+ * - Casual banter / gibberish ("helo", "hey", "asdf", "lol", "what model are you") -> 0 XP!
+ * - Basic question -> 5 XP.
+ * - In-depth, thoughtful technical inquiry or insightful commentary -> 10 to 25 XP.
+ */
+export function evaluateQueryRelevance(query, activeCourse) {
+    const trimmed = query.trim();
+    const lower = trimmed.toLowerCase();
+    // 1. Casual banter, greetings, keyboard smash, laughter, empty or gibberish -> 0 XP
+    if (trimmed.length < 3) {
+        return { xpAwarded: 0, category: 'banter' };
+    }
+    // Keyboard smash / repeated characters: e.g. "asdf", "asdfghjkl", "qwerty", "aaaaa", "zzzzz"
+    const isKeyboardSmash = /^(?:asdf+|qwerty+|zxcv+|jkl\+|1234+|test+|testing+)$/i.test(trimmed) ||
+        /^(.)\1{3,}$/i.test(trimmed);
+    if (isKeyboardSmash) {
+        return { xpAwarded: 0, category: 'banter' };
+    }
+    // Common casual banter, greetings, pleasantries, slang, simple reactions
+    const banterPatterns = [
+        /^(?:helo+|hello+|hey+|hi+|hiya+|yo+|sup+|howdy+|hola+)(?:\s+(?:there|jarvis|bot|dude|friend|man))?[!?. ]*$/i,
+        /^(?:how\s+are\s+you|what'?s\s+up|how'?s\s+it\s+going|good\s+(?:morning|evening|afternoon|day))[!?. ]*$/i,
+        /^(?:lol+|lmao+|rofl+|haha+|hahaha+|hehe+|kek+)[!?. ]*$/i,
+        /^(?:cool+|nice+|ok+|okay+|k+|fine+|sure+|alright+|awesome+|great+|sweet+)[!?. ]*$/i,
+        /^(?:thanks+|thank\s+you+|thx+|ty+|cheers+)(?:\s+(?:a\s+lot|very\s+much))?[!?. ]*$/i,
+        /^(?:bye+|goodbye+|cya+|see\s+ya+|later+)[!?. ]*$/i,
+        /^(?:what\s+model\s+are\s+you|who\s+are\s+you|what\s+are\s+you|are\s+you\s+(?:chatgpt|claude|gemini|ai|an\s+ai))[!?. ]*$/i,
+        /^(?:what\s+can\s+you\s+do|help(?:\s+me)?|test|ping)[!?. ]*$/i,
+    ];
+    if (banterPatterns.some((pattern) => pattern.test(lower))) {
+        return { xpAwarded: 0, category: 'banter' };
+    }
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    if (words.length === 1 && !isKnownTechnicalTerm(lower)) {
+        return { xpAwarded: 0, category: 'banter' };
+    }
+    // 2. In-depth, thoughtful technical inquiry or insightful commentary -> 10 to 25 XP
+    const deepTechnicalPatterns = [
+        /\b(?:architecture|mechanism|under\s+the\s+hood|internals?|trade-?offs?|vtable|heap\s+vs\s+stack|memory\s+layout)\b/i,
+        /\b(?:concurrency|deadlock|race\s+condition|mutex|thread-?safe|atomic|semaphore|goroutine|channels?)\b/i,
+        /\b(?:event\s+loop|garbage\s+collect(?:ion|or)|zero-?copy|cache\s+coherence|virtual\s+memory|paging)\b/i,
+        /\b(?:consensus|raft|paxos|byzantine|distributed\s+systems?|cap\s+theorem|acid\s+properties|eventual\s+consistency)\b/i,
+        /\b(?:superposition|entanglement|qubit|decoherence|quantum\s+gate|eigenvalues?|wavefunction|hamiltonian)\b/i,
+        /\b(?:borrow\s+checker|lifetimes?|ownership|compile-?time\s+guarantees?|type\s+system|monads?)\b/i,
+        /\b(?:backpropagation|transformer\s+attention|self-?attention|embeddings?|gradient\s+descent)\b/i,
+        /\b(?:microservices?\s+vs\s+monolith|clean\s+architecture|domain-?driven|cqrs|event\s+sourcing)\b/i,
+    ];
+    const comparativeOrThoughtful = /\b(?:compare|difference\s+between|versus|vs\.?|trade-?offs?|why\s+would\s+(?:we|you|one)\s+choose)\b/i.test(lower) ||
+        /\b(?:how\s+does\s+.+\s+(?:guarantee|prevent|handle|scale|work\s+internally|resolve))\b/i.test(lower) ||
+        /\b(?:i\s+noticed\s+that|what\s+happens\s+if|wouldn'?t\s+this\s+cause|is\s+it\s+better\s+to)\b/i.test(lower) ||
+        /```[\s\S]*```/.test(trimmed);
+    const isDeep = deepTechnicalPatterns.some((pattern) => pattern.test(lower)) || (comparativeOrThoughtful && words.length >= 6);
+    if (isDeep) {
+        const extractedTopic = extractSubjectTopic(trimmed) || (activeCourse ? activeCourse.title.toLowerCase() : 'technical');
+        let xp = 15;
+        if (words.length > 15 || /```/.test(trimmed) || deepTechnicalPatterns.filter((p) => p.test(lower)).length >= 2) {
+            xp = 25;
+        }
+        else if (words.length > 10) {
+            xp = 20;
+        }
+        return {
+            xpAwarded: xp,
+            relevanceReason: `${extractedTopic} inquiry`,
+            category: 'in-depth',
+        };
+    }
+    // 3. Basic technical question -> 5 XP
+    const basicTechnicalIndicator = /\b(?:what\s+is|what\s+are|how\s+to|how\s+do\s+i|explain|define|syntax\s+for|example\s+of)\b/i.test(lower) ||
+        isKnownTechnicalTerm(lower) ||
+        /\b(?:function|variable|array|string|loop|class|object|boolean|pointer|recursion|git|docker|api|sql|http)\b/i.test(lower);
+    if (basicTechnicalIndicator || words.length >= 4) {
+        const extractedTopic = extractSubjectTopic(trimmed) || (activeCourse ? activeCourse.title.toLowerCase() : 'concept');
+        return {
+            xpAwarded: 5,
+            relevanceReason: `${extractedTopic} inquiry`,
+            category: 'basic',
+        };
+    }
+    return {
+        xpAwarded: 0,
+        category: 'banter',
     };
 }
 /**

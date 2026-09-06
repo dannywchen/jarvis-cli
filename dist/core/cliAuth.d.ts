@@ -1,3 +1,6 @@
+import "dotenv/config";
+export declare const DEFAULT_CODEX_MODEL = "gpt-5.6-luna";
+export declare const DEFAULT_CODEX_REASONING_EFFORT: "high";
 export declare const GEMINI_CLIENT_ID: string;
 export declare const GEMINI_CLIENT_SECRET: string;
 export declare const ANTIGRAVITY_CLIENT_ID: string;
@@ -14,6 +17,7 @@ export interface CliSessionInfo {
     token?: string;
     hasValidSession: boolean;
 }
+export declare function getAntigravityCliPath(): string;
 export declare function scanDetectedCliSessions(): CliSessionInfo[];
 export declare function getPrimaryCliSession(): CliSessionInfo | null;
 export declare function getValidGoogleAccessToken(): Promise<{
@@ -25,8 +29,16 @@ export declare function refreshGoogleToken(refreshToken: string, clientId: strin
     access_token: string;
     expires_in?: number;
 } | null>;
-export declare function executeCodexPrompt(prompt: string, model?: string): Promise<{
+export declare function executeCodexPrompt(prompt: string, model?: string, reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"): Promise<{
     text: string;
+    error?: string;
+}>;
+export declare function executeAntigravityPrompt(prompt: string, model?: string): Promise<{
+    text: string;
+    error?: string;
+}>;
+export declare function runAntigravityCliLogin(): Promise<{
+    success: boolean;
     error?: string;
 }>;
 export declare function startGoogleOAuthServer(): Promise<{

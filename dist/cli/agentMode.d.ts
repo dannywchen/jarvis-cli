@@ -8,3 +8,4 @@ export declare function handleAgentSubmitAnswer(options: {
     questionId: string;
     answer: string;
 }): Promise<void>;
+export declare function handleAgentDecompose(topic: string): Promise<void>;
