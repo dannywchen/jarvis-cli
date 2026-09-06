@@ -268,6 +268,26 @@ test('composer rule does not reach the terminal right margin', async () => {
   shell.close();
 });
 
+test('fast typing repaints only changed rows and still submits on Return', async () => {
+  const { shell, stdin, stdout, submitted } = createTestShell();
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  stdout.read();
+
+  stdin.write('rapid input');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const typingFrame = stdout.read()?.toString() || '';
+
+  assert.equal(typingFrame.includes('\u001B[2J'), false);
+  assert.equal(typingFrame.includes('rapid input'), true);
+
+  stdin.write('\r');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(submitted, ['rapid input']);
+
+  shell.close();
+});
+
 test('terminal-setup slash command resolves and detects keybindings', () => {
   const cmd = resolveSlashCommand('/terminal-setup');
   assert.equal(cmd?.name, 'terminal-setup');

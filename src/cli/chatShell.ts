@@ -180,6 +180,12 @@ export class TerminalChatShell {
   private keepAliveTimer?: ReturnType<typeof setInterval>;
   private renderQueued = false;
   private screenActive = false;
+  private screenNeedsClear = true;
+  private lastPaintedLines: string[] = [];
+  private lastPaintedTranscriptVersion = -1;
+  private transcriptVersion = 0;
+  private cachedTranscriptKey = '';
+  private cachedTranscriptLines: string[] = [];
   // 0 means the newest transcript lines are visible. Positive values move the
   // transcript window toward older messages while the composer stays fixed.
   private transcriptScrollOffset = 0;
@@ -274,6 +280,7 @@ export class TerminalChatShell {
 
   add(role: ChatRole, text: string): void {
     this.transcript.push({ role, text });
+    this.transcriptVersion += 1;
     if (!this.stdout.isTTY) {
       const label = role === 'user' ? 'you' : role === 'assistant' ? 'jarvis' : role === 'activity' ? 'activity' : 'status';
       this.stdout.write(`${label}  ${text}\n`);
@@ -295,6 +302,7 @@ export class TerminalChatShell {
     };
     if (existing >= 0) this.transcript[existing] = next;
     else this.transcript.push(next);
+    this.transcriptVersion += 1;
     if (!this.stdout.isTTY) {
       const marker = event.status === 'complete' ? '✓' : event.status === 'error' ? '!' : '…';
       this.stdout.write(`activity  ${marker} ${event.label}${event.detail ? ` · ${event.detail}` : ''}\n`);
@@ -313,6 +321,7 @@ export class TerminalChatShell {
   clear(): void {
     this.transcript = [];
     this.transcriptScrollOffset = 0;
+    this.transcriptVersion += 1;
     this.options.onClear();
     this.render();
   }
@@ -612,72 +621,79 @@ export class TerminalChatShell {
 
     const palette = this.renderPalette(commands, width);
     const bodyRows = Math.max(0, rows - palette.length - composer.length);
-    const transcriptLines: string[] = [];
+    const transcriptKey = `${this.transcriptVersion}:${contentWidth}:${this.isWelcomeState() ? JSON.stringify(context) : ''}`;
+    if (transcriptKey !== this.cachedTranscriptKey) {
+      const transcriptLines: string[] = [];
 
-    if (this.isWelcomeState()) {
-      const boxLines = buildClaudeCodeBox({
-        userName: context.userName,
-        modelName: context.model,
-        level: context.level,
-        xp: context.xp,
-        cwd: context.cwd,
-        recentThreads: context.recentThreads,
-        version: 'v1.0.0',
-      }, width);
+      if (this.isWelcomeState()) {
+        const boxLines = buildClaudeCodeBox({
+          userName: context.userName,
+          modelName: context.model,
+          level: context.level,
+          xp: context.xp,
+          cwd: context.cwd,
+          recentThreads: context.recentThreads,
+          version: 'v1.0.0',
+        }, width);
 
-      transcriptLines.push('');
-      for (const line of boxLines) {
-        transcriptLines.push(line);
-      }
-      transcriptLines.push('');
-    } else {
-      for (let entryIndex = 0; entryIndex < this.transcript.length; entryIndex += 1) {
-        const entry = this.transcript[entryIndex];
-        if (entry.role === 'user') {
-          const userPill = (val: string) => chalk.bgHex('#282828').hex('#F0F0F0')(val);
-          const paragraphs = entry.text.split('\n');
-          for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
-            const prefix = pIdx === 0 ? '> ' : '  ';
-            const parts = wrapAnsi(`${prefix}${paragraphs[pIdx]}`, contentWidth);
-            for (const part of parts) {
-              transcriptLines.push(`  ${userPill(part)}`);
-            }
-          }
-        } else if (entry.role === 'assistant') {
-          const formattedLines = formatMarkdownAssistant(entry.text, contentWidth);
-          if (formattedLines.length > 0) {
-            transcriptLines.push(`  ${chalk.hex('#D97757')('•')} ${formattedLines[0]}`);
-            for (let i = 1; i < formattedLines.length; i++) {
-              transcriptLines.push(`    ${formattedLines[i]}`);
-            }
-          }
-        } else if (entry.role === 'activity') {
-          const previous = this.transcript[entryIndex - 1];
-          if (previous?.role !== 'activity') {
-            transcriptLines.push(`  ${chalk.hex('#D97757')('◇')} ${chalk.hex('#9A9A9A')('Agent activity')}`);
-          }
-          const marker = entry.activityStatus === 'complete' ? chalk.hex('#6FAF76')('✓')
-            : entry.activityStatus === 'error' ? chalk.hex('#C56A62')('!')
-              : chalk.hex('#D97757')('·');
-          const detail = entry.detail ? chalk.hex('#777777')(` · ${entry.detail}`) : '';
-          const parts = wrapAnsi(`${marker} ${entry.text}${detail}`, contentWidth - 4);
-          for (const part of parts) transcriptLines.push(`    ${part}`);
-          const next = this.transcript[entryIndex + 1];
-          if (next?.role !== 'activity') transcriptLines.push('');
-        } else {
-          // system
-          const color = chalk.hex('#8A8A8A');
-          const parts = wrapAnsi(entry.text, contentWidth);
-          if (parts.length > 0) {
-            transcriptLines.push(`  ${chalk.hex('#777777')('·')} ${color(parts[0])}`);
-            for (let i = 1; i < parts.length; i++) {
-              transcriptLines.push(`    ${color(parts[i])}`);
-            }
-          }
+        transcriptLines.push('');
+        for (const line of boxLines) {
+          transcriptLines.push(line);
         }
         transcriptLines.push('');
+      } else {
+        for (let entryIndex = 0; entryIndex < this.transcript.length; entryIndex += 1) {
+          const entry = this.transcript[entryIndex];
+          if (entry.role === 'user') {
+            const userPill = (val: string) => chalk.bgHex('#282828').hex('#F0F0F0')(val);
+            const paragraphs = entry.text.split('\n');
+            for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+              const prefix = pIdx === 0 ? '> ' : '  ';
+              const parts = wrapAnsi(`${prefix}${paragraphs[pIdx]}`, contentWidth);
+              for (const part of parts) {
+                transcriptLines.push(`  ${userPill(part)}`);
+              }
+            }
+          } else if (entry.role === 'assistant') {
+            const formattedLines = formatMarkdownAssistant(entry.text, contentWidth);
+            if (formattedLines.length > 0) {
+              transcriptLines.push(`  ${chalk.hex('#D97757')('•')} ${formattedLines[0]}`);
+              for (let i = 1; i < formattedLines.length; i += 1) {
+                transcriptLines.push(`    ${formattedLines[i]}`);
+              }
+            }
+          } else if (entry.role === 'activity') {
+            const previous = this.transcript[entryIndex - 1];
+            if (previous?.role !== 'activity') {
+              transcriptLines.push(`  ${chalk.hex('#D97757')('◇')} ${chalk.hex('#9A9A9A')('Agent activity')}`);
+            }
+            const marker = entry.activityStatus === 'complete' ? chalk.hex('#6FAF76')('✓')
+              : entry.activityStatus === 'error' ? chalk.hex('#C56A62')('!')
+                : chalk.hex('#D97757')('·');
+            const detail = entry.detail ? chalk.hex('#777777')(` · ${entry.detail}`) : '';
+            const parts = wrapAnsi(`${marker} ${entry.text}${detail}`, contentWidth - 4);
+            for (const part of parts) transcriptLines.push(`    ${part}`);
+            const next = this.transcript[entryIndex + 1];
+            if (next?.role !== 'activity') transcriptLines.push('');
+          } else {
+            // system
+            const color = chalk.hex('#8A8A8A');
+            const parts = wrapAnsi(entry.text, contentWidth);
+            if (parts.length > 0) {
+              transcriptLines.push(`  ${chalk.hex('#777777')('·')} ${color(parts[0])}`);
+              for (let i = 1; i < parts.length; i += 1) {
+                transcriptLines.push(`    ${color(parts[i])}`);
+              }
+            }
+          }
+          transcriptLines.push('');
+        }
       }
+
+      this.cachedTranscriptKey = transcriptKey;
+      this.cachedTranscriptLines = transcriptLines;
     }
+    const transcriptLines = this.cachedTranscriptLines;
 
     const maxScrollOffset = Math.max(0, transcriptLines.length - bodyRows);
     this.transcriptScrollOffset = Math.min(Math.max(0, this.transcriptScrollOffset), maxScrollOffset);
@@ -693,13 +709,32 @@ export class TerminalChatShell {
 
     const composerStartIndex = lines.length - composer.length;
     const cursorIndex = composerStartIndex + this.composerCursorLine;
-    const rowsUp = Math.max(0, lines.length - 1 - cursorIndex);
-    const moveToPrompt = `${rowsUp ? `${ESC}${rowsUp}A` : ''}${ESC}${this.composerCursorColumn}G`;
+    const cursorRow = cursorIndex + 1;
+    const moveToPrompt = `${ESC}${cursorRow};${this.composerCursorColumn}H`;
 
-    // One write keeps the clear + paint + cursor placement atomic. The final
-    // newline is intentionally omitted: it would create an extra scroll step
-    // when the last status row exactly fills the terminal width.
-    this.stdout.write(`${ESC}?25l${ESC}H${ESC}2J${lines.join('\n')}${moveToPrompt}${ESC}?25h`);
+    // Clear once when entering the alternate screen. After that, only rows
+    // whose content changed are repainted at absolute positions. Clearing or
+    // streaming the whole viewport on every keypress is visibly flash-heavy,
+    // and the extra terminal work can starve the event loop during fast input.
+    const fullPaint = this.screenNeedsClear
+      || this.lastPaintedLines.length !== lines.length
+      || this.lastPaintedTranscriptVersion !== this.transcriptVersion;
+    let paint = '';
+    if (fullPaint) {
+      paint = `${ESC}H${this.screenNeedsClear ? `${ESC}2J` : ''}${lines
+        .map((line, index) => `${ESC}2K${line}${index === lines.length - 1 ? '' : '\n'}`)
+        .join('')}`;
+    } else {
+      for (let index = 0; index < lines.length; index += 1) {
+        if (lines[index] !== this.lastPaintedLines[index]) {
+          paint += `${ESC}${index + 1};1H${ESC}2K${lines[index]}`;
+        }
+      }
+    }
+    this.lastPaintedLines = lines;
+    this.lastPaintedTranscriptVersion = this.transcriptVersion;
+    this.screenNeedsClear = false;
+    this.stdout.write(`${ESC}?25l${paint}${moveToPrompt}${ESC}?25h`);
   };
 
   /** Keep the chat viewport independent from the terminal's normal scrollback. */
@@ -711,6 +746,9 @@ export class TerminalChatShell {
     // ?2004h enables bracketed paste mode so multi-line pastes don't prematurely submit.
     // ?1000h + ?1006h lets us translate terminal wheel events into transcript scrolling.
     this.stdout.write(`${ESC}?1049h${ESC}?25l${ESC}>1u${ESC}?2004h${ESC}?1000h${ESC}?1006h`);
+    this.screenNeedsClear = true;
+    this.lastPaintedLines = [];
+    this.lastPaintedTranscriptVersion = -1;
     this.screenActive = true;
   }
 
