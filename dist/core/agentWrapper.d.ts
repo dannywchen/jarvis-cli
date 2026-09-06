@@ -1,4 +1,4 @@
-import { UserProfile, Course, Question } from '../types/index.js';
+import { UserProfile, Course, Question, GeneratedLearningHistoryEntry } from '../types/index.js';
 import { ProviderType } from './liveClient.js';
 import { AgentActivitySink } from './agentTools.js';
 export interface AgentResponse {
@@ -45,7 +45,18 @@ export declare function shouldUseWorkspaceTools(query: string): boolean;
  * - In-depth, thoughtful technical inquiry or insightful commentary -> 10 to 25 XP.
  */
 export declare function evaluateQueryRelevance(query: string, activeCourse?: Course | null): RelevanceEvaluation;
-/**
- * Dynamically synthesizes an interactive 3-question drill on any topic on demand.
- */
-export declare function generateOnTheFlyQuiz(topic: string, activeCourse?: Course | null): Promise<Question[]>;
+export interface GeneratedFlashcard {
+    front: string;
+    back: string;
+    hint?: string;
+}
+export interface LearningGenerationOptions {
+    forceOffline?: boolean;
+    timeoutMs?: number;
+    mode?: 'quiz' | 'practice';
+}
+export declare function rememberGeneratedLearning(profile: UserProfile, kind: GeneratedLearningHistoryEntry['kind'], topic: string, prompts: string[]): void;
+/** Generate a fresh, course-grounded drill and avoid prompts used in earlier attempts. */
+export declare function generateOnTheFlyQuiz(topic: string, activeCourse?: Course | null, profile?: UserProfile, options?: LearningGenerationOptions): Promise<Question[]>;
+/** Generate new flashcards from the active agent, with an unused course-card fallback. */
+export declare function generateOnTheFlyFlashcards(topic: string, activeCourse?: Course | null, profile?: UserProfile, options?: LearningGenerationOptions): Promise<GeneratedFlashcard[]>;

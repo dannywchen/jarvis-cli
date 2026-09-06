@@ -207,7 +207,7 @@ export function renderJarvisChatBox(
   const width = Math.max(36, Math.min(process.stdout.columns || 88, 96));
   const hr = chalk.hex('#353535')('─'.repeat(width));
   const promptChar = chalk.hex('#D97757')('>');
-  const placeholder = chalk.hex('#666666')('try "learn quantum computing" or ask any question...');
+  const placeholder = chalk.hex('#666666')('say what you want to learn, or ask any question...');
   const promptLine = currentInput
     ? `  ${promptChar} ${chalk.hex('#F0F0F0')(currentInput)}`
     : `  ${promptChar} ${placeholder}`;

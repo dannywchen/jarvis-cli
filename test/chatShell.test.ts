@@ -263,7 +263,9 @@ test('composer rule does not reach the terminal right margin', async () => {
 
   shell.add('assistant', 'A response after sending a message.');
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.ok((stdout.read()?.toString() || '').includes('manual mode'));
+  const responseFrame = stdout.read()?.toString() || '';
+  assert.equal(responseFrame.includes('\u001B[2J'), false);
+  assert.equal(responseFrame.includes('A response after sending a message.'), true);
 
   shell.close();
 });
@@ -279,6 +281,10 @@ test('fast typing repaints only changed rows and still submits on Return', async
   const typingFrame = stdout.read()?.toString() || '';
 
   assert.equal(typingFrame.includes('\u001B[2J'), false);
+  assert.equal(typingFrame.includes('\u001B[?25l'), false);
+  assert.equal(typingFrame.includes('\u001B[?25h'), false);
+  assert.equal(typingFrame.includes('\u001B[?2026h'), true);
+  assert.equal(typingFrame.includes('\u001B[?2026l'), true);
   assert.equal(typingFrame.includes('rapid input'), true);
 
   stdin.write('\r');

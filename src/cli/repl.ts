@@ -4,7 +4,6 @@ import boxen from 'boxen';
 import os from 'node:os';
 import { parseDocument } from '../core/parser.js';
 import { generateCourse } from '../core/generator.js';
-import { decomposeTopicIntoConcepts } from '../core/topicEngine.js';
 import {
   loadUserProfile,
   saveUserProfile,
@@ -25,9 +24,11 @@ import {
   queryActiveAgent,
   resolveActiveCredentials,
   generateOnTheFlyQuiz,
+  generateOnTheFlyFlashcards,
+  rememberGeneratedLearning,
 } from '../core/agentWrapper.js';
 import { POPULAR_MODELS } from '../core/liveClient.js';
-import { ChatMessageRole, Course, Lesson, RecentThread, UserProfile, SkillNode } from '../types/index.js';
+import { ChatMessageRole, Course, Lesson, RecentThread, RecentThreadSummary, UserProfile, SkillNode } from '../types/index.js';
 import { playChime } from './effects.js';
 import { TerminalChatShell } from './chatShell.js';
 import { parseCommandInput, resolveCommandInput } from './commands.js';
@@ -36,6 +37,7 @@ import { formatTerminalSetupReport } from './terminalSetup.js';
 import type { AgentActivityEvent } from '../core/agentTools.js';
 import { activateCourse, buildLearningContext, getCourseProgress, normalizeLearningIntent, selectCourse } from '../core/learningEngine.js';
 import { LearningIntent } from '../types/index.js';
+import { executeDirectCourseCommand } from '../core/courseAgentTools.js';
 
 export interface ReplHistorySnapshot {
   recentThreads: RecentThread[];
@@ -57,6 +59,7 @@ export interface JarvisCliHarnessOptions extends ReplHistoryCallbacks {
 
 export interface JarvisCliHarness {
   getSnapshot(): ReplHistorySnapshot;
+  getThreadSummaries(limit?: number): RecentThreadSummary[];
   refresh(): Promise<ReplHistorySnapshot>;
   startNew(): Promise<ReplHistorySnapshot>;
   resume(threadId: string): Promise<RecentThread | null>;
@@ -112,6 +115,9 @@ export async function createJarvisCliHarness(options: JarvisCliHarnessOptions = 
 
   return {
     getSnapshot: () => cloneSnapshot(snapshot),
+    // Rendering only needs the small sidebar summaries. Avoid cloning every
+    // persisted message just because the composer repainted for one key.
+    getThreadSummaries: (limit = 4) => summarizeRecentThreads(snapshot.recentThreads, limit),
     refresh: async () => {
       snapshot = await loadReplHistory(options.threadId || snapshot.activeThread?.id);
       return cloneSnapshot(snapshot);
@@ -158,22 +164,13 @@ export async function startJarvisCliRepl(options: JarvisCliHarnessOptions = {}):
     activeCourse = await loadCourse(profile.activeCourseId);
   }
 
-  if (!activeCourse) {
-    const courses = await listSavedCourses();
-    if (courses.length > 0) {
-      activeCourse = courses[0];
-      profile.activeCourseId = activeCourse.id;
-      await saveUserProfile(profile);
-    }
-  }
-
-  const initialCredentials = resolveActiveCredentials(profile);
+  let activeCredentials = resolveActiveCredentials(profile);
   const historyHarness = await createJarvisCliHarness({
     ...options,
     metadata: {
-      provider: initialCredentials.provider,
-      model: initialCredentials.model,
-      harness: initialCredentials.harnessName,
+      provider: activeCredentials.provider,
+      model: activeCredentials.model,
+      harness: activeCredentials.harnessName,
       ...options.metadata,
     },
   });
@@ -181,7 +178,7 @@ export async function startJarvisCliRepl(options: JarvisCliHarnessOptions = {}):
   let shell!: TerminalChatShell;
   shell = new TerminalChatShell({
     getContext: () => ({
-      model: resolveActiveCredentials(profile).model,
+      model: activeCredentials.model,
       userName: displayName(profile.name),
       courseTitle: activeCourse?.title,
       streak: profile.streak,
@@ -189,7 +186,7 @@ export async function startJarvisCliRepl(options: JarvisCliHarnessOptions = {}):
       level: profile.level,
       cwd: formatCwd(process.cwd()),
       nextLesson: activeCourse?.nodes.find((node) => node.status === 'active')?.lessons.find((lesson) => !lesson.isCompleted)?.title,
-      recentThreads: summarizeRecentThreads(historyHarness.getSnapshot().recentThreads, 4),
+      recentThreads: historyHarness.getThreadSummaries(4),
     }),
     onClear: () => undefined,
     onSubmit: async (rawInput) => {
@@ -206,6 +203,7 @@ export async function startJarvisCliRepl(options: JarvisCliHarnessOptions = {}):
           profile.apiProvider = provider;
           profile.activeModel = POPULAR_MODELS[provider][0].id;
           await saveUserProfile(profile);
+          activeCredentials = resolveActiveCredentials(profile);
           shell.add('system', `Connected to ${provider.toUpperCase()}.`);
           return;
         }
@@ -220,19 +218,6 @@ export async function startJarvisCliRepl(options: JarvisCliHarnessOptions = {}):
 
         const commandName = command?.name || '';
         const args = parsed?.args || '';
-
-        if (!command && !query.startsWith('/')) {
-          const requestedTopic = inferCourseCreationTopic(query);
-          if (requestedTopic) {
-            await shell.suspend(async () => {
-              await handleTopicLearning(requestedTopic, profile, (course) => {
-                activeCourse = course;
-              });
-            });
-            shell.add('system', `Learning plan ready for ${requestedTopic}.`);
-            return;
-          }
-        }
 
         if (commandName === 'exit') {
           shell.add('system', 'Session closed.');
@@ -252,6 +237,7 @@ export async function startJarvisCliRepl(options: JarvisCliHarnessOptions = {}):
         if (commandName === 'auth') {
           try {
             await shell.suspend(() => runAuthSetup(profile));
+            activeCredentials = resolveActiveCredentials(profile);
             shell.add('system', 'Connection settings updated.');
           } catch (err: any) {
             shell.add('system', `Auth notice: ${err?.message || err}`);
@@ -261,6 +247,7 @@ export async function startJarvisCliRepl(options: JarvisCliHarnessOptions = {}):
         if (commandName === 'model') {
           try {
             await shell.suspend(() => runModelPicker(profile));
+            activeCredentials = resolveActiveCredentials(profile);
             shell.add('system', `Using ${resolveActiveCredentials(profile).model}.`);
           } catch (err: any) {
             shell.add('system', `Model notice: ${err?.message || err}`);
@@ -318,12 +305,11 @@ export async function startJarvisCliRepl(options: JarvisCliHarnessOptions = {}):
         if (commandName === 'learn') {
           try {
             if (args.trim()) {
-              await shell.suspend(async () => {
-                await handleTopicLearning(args.trim(), profile, (course) => {
-                  activeCourse = course;
-                });
-              });
-              shell.add('system', 'Topic learning session complete.');
+              const result = await executeDirectCourseCommand(`I wanna learn ${args.trim()}`, profile);
+              if (result) {
+                activeCourse = profile.activeCourseId ? await loadCourse(profile.activeCourseId) : null;
+                shell.add('assistant', result.text);
+              }
               return;
             }
             const activeNode = activeCourse?.nodes.find((node) => node.status === 'active') || activeCourse?.nodes[0];
@@ -398,23 +384,15 @@ export async function startJarvisCliRepl(options: JarvisCliHarnessOptions = {}):
           try {
             let topicName = args.trim();
             if (!topicName) {
-              const prompted = await shell.suspend(async () => {
-                return await p.text({
-                  message: 'What topic would you like to master?',
-                  placeholder: 'e.g. Quantum Superposition, Rust Concurrency, Docker Networking',
-                });
-              });
-              if (p.isCancel(prompted) || !prompted) return;
-              topicName = String(prompted).trim();
+              shell.add('assistant', 'What would you like to learn? Type the topic in the composer and press Enter.');
+              return;
             }
             if (!topicName) return;
-
-            await shell.suspend(async () => {
-              await handleTopicLearning(topicName, profile, (course) => {
-                activeCourse = course;
-              });
-            });
-            shell.add('system', 'Topic learning session complete.');
+            const result = await executeDirectCourseCommand(`I wanna learn ${topicName}`, profile);
+            if (result) {
+              activeCourse = profile.activeCourseId ? await loadCourse(profile.activeCourseId) : null;
+              shell.add('assistant', result.text);
+            }
           } catch (err: any) {
             shell.add('system', `Topic notice: ${err?.message || err}`);
           }
@@ -467,6 +445,7 @@ export async function startJarvisCliRepl(options: JarvisCliHarnessOptions = {}):
           // /learn, /roadmap, quizzes, and the next agent turn.
           const refreshedProfile = await loadUserProfile();
           Object.assign(profile, refreshedProfile);
+          activeCredentials = resolveActiveCredentials(profile);
           activeCourse = profile.activeCourseId ? await loadCourse(profile.activeCourseId) : null;
           const role: ChatMessageRole = aiResponse.requiresAuth ? 'system' : 'assistant';
           shell.add(role, aiResponse.text);
@@ -549,11 +528,6 @@ function displayName(name?: string): string {
   return accountName.charAt(0).toUpperCase() + accountName.slice(1);
 }
 
-function inferCourseCreationTopic(query: string): string | null {
-  const match = query.trim().match(/^(?:i\s+(?:want\s+to|wanna)\s+learn|teach\s+me|help\s+me\s+learn|build\s+(?:me\s+)?a\s+roadmap\s+for|create\s+(?:a\s+)?course\s+for|i\s+need\s+to\s+master)\s+(.+)$/i);
-  return match?.[1]?.replace(/[.!?]+$/, '').trim() || null;
-}
-
 function selectThread(threads: ReturnType<typeof summarizeRecentThreads>, selector: string): ReturnType<typeof summarizeRecentThreads>[number] | null {
   const cleanSelector = selector.trim();
   if (!cleanSelector) return threads[0] || null;
@@ -583,12 +557,18 @@ async function handleOnTheFlyQuiz(
   activeCourse: Course | null,
   profile: any
 ): Promise<void> {
-  const quizTitle = topic ? topic.toUpperCase() : activeCourse ? activeCourse.title : 'TECHNICAL SYNTHESIS';
+  const quizTitle = topic.trim() || activeCourse?.title || 'your active course';
   const spinner = p.spinner();
-  spinner.start(`✦ Generating interactive drill for "${quizTitle}"...`);
+  spinner.start(`✦ Building a fresh quiz on "${quizTitle}"...`);
 
-  const questions = await generateOnTheFlyQuiz(topic, activeCourse);
-  spinner.stop('Drill generated:');
+  const questions = await generateOnTheFlyQuiz(topic, activeCourse, profile);
+  if (!questions.length) {
+    spinner.stop('No unused questions available:');
+    throw new Error(`I could not find a fresh, relevant quiz for "${quizTitle}". Connect an AI agent with /auth or finish building this course first.`);
+  }
+  rememberGeneratedLearning(profile, 'quiz', topic || activeCourse?.title || quizTitle, questions.map((question) => question.prompt));
+  await saveUserProfile(profile);
+  spinner.stop(`Fresh quiz ready: ${questions.length} questions`);
 
   const tempLesson: Lesson = {
     id: `drill_${Date.now()}`,
@@ -687,63 +667,6 @@ function formatHelpGuide(): string {
   ].join('\n');
 }
 
-async function handleTopicLearning(
-  topic: string,
-  profile: UserProfile,
-  onCourseCreated: (course: Course) => void
-): Promise<void> {
-  const spinner = p.spinner();
-  spinner.start(chalk.hex('#E07A5F')(`✦ Decomposing "${topic}" into bite-sized micro-concepts...`));
-
-  try {
-    const goalInput = await p.text({
-      message: 'What do you want to be able to do with this topic?',
-      placeholder: `e.g. Build a real project, pass an interview, or explain ${topic} confidently`,
-    });
-    const levelInput = await p.select({
-      message: 'What is your current level?',
-      options: [
-        { value: 'beginner', label: 'Beginner — start from first principles' },
-        { value: 'intermediate', label: 'Intermediate — connect and apply concepts' },
-        { value: 'advanced', label: 'Advanced — sharpen depth and edge cases' },
-      ],
-      initialValue: 'intermediate',
-    });
-    const intent = normalizeLearningIntent({
-      goal: p.isCancel(goalInput) || !goalInput ? undefined : String(goalInput),
-      level: p.isCancel(levelInput) ? 'intermediate' : levelInput as LearningIntent['level'],
-    }, topic);
-    const result = await decomposeTopicIntoConcepts(topic, profile, { intent });
-    const course = result.course;
-    activateCourse(profile, course);
-    await saveCourse(course);
-    await saveUserProfile(profile);
-    onCourseCreated(course);
-
-    spinner.stop(chalk.hex('#10B981').bold(`Decomposed "${course.title}" into ${course.nodes.length} progressive concepts!`));
-
-    const overview = course.nodes.map((n, i) => `${i + 1}. ${n.title} - ${n.description}`).join('\n');
-    p.note(overview, 'Micro-Curriculum Roadmap');
-
-    const startChoice = await p.confirm({
-      message: `Start the first lesson: "${course.nodes[0]?.lessons[0]?.title || course.title}"?`,
-      initialValue: true,
-    });
-
-    if (!p.isCancel(startChoice) && startChoice) {
-      const firstNode = course.nodes[0];
-      const firstLesson = firstNode.lessons[0];
-      const lessonResult = await runLesson(firstLesson, firstNode, course, profile);
-      if (lessonResult.success) {
-        await saveCourse(course);
-        await saveUserProfile(profile);
-      }
-    }
-  } catch (err: any) {
-    spinner.stop(chalk.hex('#F87171')(`Could not decompose topic: ${err.message}`));
-  }
-}
-
 async function handleFlashcardReview(
   topicArg: string,
   activeCourse: Course | null,
@@ -752,9 +675,11 @@ async function handleFlashcardReview(
   console.clear();
   console.log('\n  ' + chalk.hex('#F8FAFC').bold('[FLASHCARDS] ACTIVE RECALL REVIEW'));
 
-  let targetCards: Array<{ front: string; back: string; hint?: string }> = [];
+  const subject = topicArg.trim() || activeCourse?.title || '';
+  const generatedCards = await generateOnTheFlyFlashcards(subject, activeCourse, profile);
+  let targetCards: Array<{ front: string; back: string; hint?: string }> = generatedCards;
 
-  if (activeCourse) {
+  if (!targetCards.length && activeCourse) {
     for (const node of activeCourse.nodes) {
       for (const lesson of node.lessons) {
         for (const q of lesson.questions) {
@@ -766,7 +691,7 @@ async function handleFlashcardReview(
     }
   }
 
-  if (topicArg.trim()) {
+  if (topicArg.trim() && !generatedCards.length) {
     const filterTerm = topicArg.trim().toLowerCase();
     targetCards = targetCards.filter(
       (c) => c.front.toLowerCase().includes(filterTerm) || c.back.toLowerCase().includes(filterTerm)
@@ -774,25 +699,10 @@ async function handleFlashcardReview(
   }
 
   if (targetCards.length === 0) {
-    const subject = topicArg.trim() || activeCourse?.title || 'Core Engineering';
-    targetCards = [
-      {
-        front: `What is the core principle of Separation of Concerns in ${subject}?`,
-        back: 'Decomposing a program into distinct sections where each section addresses a separate concern or responsibility, preventing ripple effects upon changes.',
-        hint: 'Think modularity and maintenance.',
-      },
-      {
-        front: `What invariant must be preserved during concurrent mutations in ${subject}?`,
-        back: 'State consistency across thread and process boundaries, guaranteed via atomic operations, mutexes, or immutable memory.',
-        hint: 'Think synchronization and race conditions.',
-      },
-      {
-        front: `Why are pure functions and immutability favored in ${subject}?`,
-        back: 'They eliminate hidden side effects, simplify reasoning, and allow safe parallel execution without locks.',
-        hint: 'Think reproducibility and testability.',
-      },
-    ];
+    throw new Error(`I could not find fresh, relevant flashcards for "${subject || 'this topic'}". Connect an AI agent with /auth or build a course first.`);
   }
+
+  rememberGeneratedLearning(profile, 'flashcards', subject, targetCards.map((card) => card.front));
 
   p.intro(chalk.hex('#38BDF8')(`Reviewing ${targetCards.length} flashcard(s)...`));
 

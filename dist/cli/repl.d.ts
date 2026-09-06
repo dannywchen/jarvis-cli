@@ -1,5 +1,5 @@
 import { RecentThreadMetadata } from '../core/storage.js';
-import { ChatMessageRole, RecentThread } from '../types/index.js';
+import { ChatMessageRole, RecentThread, RecentThreadSummary } from '../types/index.js';
 export interface ReplHistorySnapshot {
     recentThreads: RecentThread[];
     activeThread: RecentThread | null;
@@ -17,6 +17,7 @@ export interface JarvisCliHarnessOptions extends ReplHistoryCallbacks {
 }
 export interface JarvisCliHarness {
     getSnapshot(): ReplHistorySnapshot;
+    getThreadSummaries(limit?: number): RecentThreadSummary[];
     refresh(): Promise<ReplHistorySnapshot>;
     startNew(): Promise<ReplHistorySnapshot>;
     resume(threadId: string): Promise<RecentThread | null>;

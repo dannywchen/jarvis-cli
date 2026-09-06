@@ -182,7 +182,6 @@ export class TerminalChatShell {
   private screenActive = false;
   private screenNeedsClear = true;
   private lastPaintedLines: string[] = [];
-  private lastPaintedTranscriptVersion = -1;
   private transcriptVersion = 0;
   private cachedTranscriptKey = '';
   private cachedTranscriptLines: string[] = [];
@@ -716,12 +715,11 @@ export class TerminalChatShell {
     // whose content changed are repainted at absolute positions. Clearing or
     // streaming the whole viewport on every keypress is visibly flash-heavy,
     // and the extra terminal work can starve the event loop during fast input.
-    const fullPaint = this.screenNeedsClear
-      || this.lastPaintedLines.length !== lines.length
-      || this.lastPaintedTranscriptVersion !== this.transcriptVersion;
+    const initialPaint = this.screenNeedsClear;
+    const fullPaint = initialPaint || this.lastPaintedLines.length !== lines.length;
     let paint = '';
     if (fullPaint) {
-      paint = `${ESC}H${this.screenNeedsClear ? `${ESC}2J` : ''}${lines
+      paint = `${ESC}H${initialPaint ? `${ESC}2J` : ''}${lines
         .map((line, index) => `${ESC}2K${line}${index === lines.length - 1 ? '' : '\n'}`)
         .join('')}`;
     } else {
@@ -732,9 +730,19 @@ export class TerminalChatShell {
       }
     }
     this.lastPaintedLines = lines;
-    this.lastPaintedTranscriptVersion = this.transcriptVersion;
     this.screenNeedsClear = false;
-    this.stdout.write(`${ESC}?25l${paint}${moveToPrompt}${ESC}?25h`);
+    // Cursor mode changes are surprisingly expensive in a few terminal
+    // frontends: they trigger a full surface refresh even when only the
+    // composer row changed. Keep the cursor visible during all updates after
+    // the initial screen paint.
+    const cursorMode = initialPaint ? `${ESC}?25l` : '';
+    const cursorModeRestore = initialPaint ? `${ESC}?25h` : '';
+    // DEC synchronized output (2026) is ignored by terminals that do not
+    // support it, while modern terminals apply all cursor movement and row
+    // updates as one visual transaction. This prevents partial-frame tearing.
+    const syncStart = `${ESC}?2026h`;
+    const syncEnd = `${ESC}?2026l`;
+    this.stdout.write(`${syncStart}${cursorMode}${paint}${moveToPrompt}${cursorModeRestore}${syncEnd}`);
   };
 
   /** Keep the chat viewport independent from the terminal's normal scrollback. */
@@ -748,7 +756,6 @@ export class TerminalChatShell {
     this.stdout.write(`${ESC}?1049h${ESC}?25l${ESC}>1u${ESC}?2004h${ESC}?1000h${ESC}?1006h`);
     this.screenNeedsClear = true;
     this.lastPaintedLines = [];
-    this.lastPaintedTranscriptVersion = -1;
     this.screenActive = true;
   }
 
@@ -779,7 +786,7 @@ export class TerminalChatShell {
     const hr = chalk.hex('#353535')('─'.repeat(Math.max(1, width - 1)));
     const inputWidth = Math.max(12, width - 4);
     const promptChar = chalk.hex('#D97757')('>');
-    const placeholder = chalk.hex('#666666')('try "learn quantum computing" or ask any question...');
+    const placeholder = chalk.hex('#666666')('say what you want to learn, or ask any question...');
     const inputLines = this.wrapInput(this.input, inputWidth);
     const lines = [hr];
     inputLines.forEach((line, index) => {

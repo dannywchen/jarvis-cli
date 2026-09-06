@@ -7,6 +7,7 @@ import { loadReviewItems, saveReviewItems } from '../../core/storage.js';
 import { evaluateOpenEndedAnswer } from '../../core/topicEngine.js';
 import { awardXp } from '../../core/gamification.js';
 import { playChime } from '../effects.js';
+import { generateOnTheFlyQuiz, rememberGeneratedLearning } from '../../core/agentWrapper.js';
 
 export async function runPracticeSession(profile: UserProfile, activeCourse?: Course | null): Promise<void> {
   console.clear();
@@ -208,9 +209,18 @@ export async function runPracticeSession(profile: UserProfile, activeCourse?: Co
     playChime();
     console.log(chalk.hex('#10B981')(`\n[UPDATED] Spaced repetition interval: Next review in ${updated.intervalDays} day(s).`));
   } else {
-    // Quick micro-quiz from active course
-    const randomNode = activeCourse?.nodes.find((n) => n.status !== 'locked');
-    const question = randomNode?.lessons[0]?.questions[0];
+    // No due card: ask the active agent for a fresh, course-grounded check
+    // instead of always replaying the first stored question.
+    const generated = activeCourse
+      ? await generateOnTheFlyQuiz(activeCourse.title, activeCourse, profile, { mode: 'practice' })
+      : [];
+    const question = generated[0] || activeCourse?.nodes
+      .filter((node) => node.status !== 'locked')
+      .flatMap((node) => node.lessons.flatMap((lesson) => lesson.questions))[0];
+
+    if (generated.length) {
+      rememberGeneratedLearning(profile, 'quiz', activeCourse?.title || 'current course', generated.map((item) => item.prompt));
+    }
 
     if (question) {
       if (question.type === 'flashcard') {

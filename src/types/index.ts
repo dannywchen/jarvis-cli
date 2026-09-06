@@ -147,6 +147,15 @@ export interface UserProfile {
   };
   selectedAgent?: 'antigravity' | 'claude' | 'gemini' | 'codex' | 'autonomous';
   activeModel?: string;
+  /** Prompts already used by generated study activities, used to avoid repeats. */
+  generatedLearningHistory?: GeneratedLearningHistoryEntry[];
+}
+
+export interface GeneratedLearningHistoryEntry {
+  kind: 'quiz' | 'flashcards';
+  topic: string;
+  prompts: string[];
+  createdAt: string;
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'system';

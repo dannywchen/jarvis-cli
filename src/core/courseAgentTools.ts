@@ -201,6 +201,63 @@ export interface DirectCourseCommandResult {
   changed: boolean;
 }
 
+export interface LearningRequest {
+  topic: string;
+  intent: LearningIntent;
+}
+
+/**
+ * Pull the actual subject out of a natural-language learning request.
+ *
+ * This deliberately lives below the CLI so every entry point (chat, agent,
+ * and tests) gets the same behavior. The old flow passed the entire sentence
+ * to the course generator, which made qualifiers such as "in detail" and
+ * learner context become part of the course title.
+ */
+export function parseLearningRequest(query: string): LearningRequest | null {
+  const clean = query.trim().replace(/[\n\r]+/g, ' ');
+  const match = clean.match(
+    /^(?:can you\s+|please\s+|i\s+(?:want\s+to\s+learn|wanna\s+learn|would\s+like\s+to\s+learn)\s+|teach\s+me\s+|help\s+me\s+learn\s+|create\s+(?:a\s+)?course\s+(?:for|on)\s+|build\s+(?:a\s+)?(?:course|roadmap)\s+(?:for|on)\s+|(?:study|master)\s+)(.+)$/i,
+  );
+  if (!match) return null;
+
+  const fullRequest = match[1].trim().replace(/[.!?]+$/, '').trim();
+  if (!fullRequest) return null;
+
+  // Keep the first request clause as the subject. Context after a sentence
+  // boundary is useful for intent detection, not for naming the course.
+  const firstClause = fullRequest.split(/(?<=[.!?])\s+|\s+(?:so\s+i\s+can|because|so\s+that)\s+/i)[0].trim().replace(/[.!?]+$/, '').trim();
+  const topic = firstClause
+    .replace(/\s+(?:in|from)\s+(?:great\s+)?detail$/i, '')
+    .replace(/\s+in[- ]depth$/i, '')
+    .replace(/\s+from\s+scratch$/i, '')
+    .replace(/\s+confidently$/i, '')
+    .replace(/[,:;\-–—]+$/, '')
+    .trim();
+  if (!topic) return null;
+
+  const level = /\b(?:intro(?:duction)?\s+to\s+cs|beginner|new\s+to|no\s+experience|from\s+scratch)\b/i.test(clean)
+    ? 'beginner'
+    : /\b(?:advanced|expert|deep\s+dive|senior)\b/i.test(clean)
+      ? 'advanced'
+      : 'intermediate';
+  const explicitOutcome = clean.match(/\b(?:so\s+i\s+can|so\s+that\s+i\s+can)\s+(.+)$/i)?.[1]
+    ?.replace(/[.!?]+$/, '')
+    .trim();
+  const goal = explicitOutcome
+    ? `Learn ${topic} so I can ${explicitOutcome}`
+    : `Understand ${topic}${/\b(?:in|from)\s+(?:great\s+)?detail|\bin[- ]depth\b/i.test(clean) ? ' in detail' : ''}`;
+
+  return {
+    topic,
+    intent: normalizeLearningIntent({
+      goal,
+      targetOutcome: goal,
+      level,
+    }, topic),
+  };
+}
+
 /** Handles unambiguous course commands even when no LLM credentials are configured. */
 export async function executeDirectCourseCommand(query: string, profile: UserProfile): Promise<DirectCourseCommandResult | null> {
   const clean = query.trim().replace(/[\n\r]+/g, ' ');
@@ -218,11 +275,10 @@ export async function executeDirectCourseCommand(query: string, profile: UserPro
     return { changed: true, text: `Removed course "${result.deletedTitle}".${result.activeCourseId ? ' The next saved course is now active.' : ' No active course remains.'}` };
   }
 
-  const learnMatch = clean.match(/^(?:i\s+(?:want\s+to|wanna|would\s+like\s+to)\s+learn|teach\s+me|help\s+me\s+learn|create\s+(?:a\s+)?course\s+(?:for|on)|build\s+(?:a\s+)?(?:course|roadmap)\s+(?:for|on)|(?:study|master))\s+(.+?)[.!?]?$/i);
-  if (learnMatch) {
-    const topic = learnMatch[1].trim();
-    const result = JSON.parse(await createCourse(profile, { topic })) as { course: { title: string; progress: { totalNodes: number } } };
-    return { changed: true, text: `Prepared the full "${result.course.title}" course with ${result.course.progress.totalNodes} modules and switched to it as the active course. Your next lesson is loaded.` };
+  const learningRequest = parseLearningRequest(clean);
+  if (learningRequest) {
+    const result = JSON.parse(await createCourse(profile, { topic: learningRequest.topic, ...learningRequest.intent })) as { course: { title: string; progress: { totalNodes: number } } };
+    return { changed: true, text: `Done — "${result.course.title}" is now your active path with ${result.course.progress.totalNodes} modules. Your next lesson is loaded; type /learn when you want to start, or keep asking questions here.` };
   }
 
   return null;
