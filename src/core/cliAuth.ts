@@ -61,7 +61,7 @@ export function scanDetectedCliSessions(): CliSessionInfo[] {
         harness: "antigravity-cli",
         name: "Antigravity CLI (OAuth)",
         email,
-        defaultModel: "gemini-2.0-flash",
+        defaultModel: "gemini-3.8-flash-tiered",
         token: tokenObj.access_token,
         hasValidSession: !!(tokenObj.access_token || tokenObj.refresh_token),
       });
@@ -80,7 +80,7 @@ export function scanDetectedCliSessions(): CliSessionInfo[] {
           harness: "gemini-cli",
           name: "Gemini CLI (OAuth)",
           email,
-          defaultModel: "gemini-2.0-flash",
+          defaultModel: "gemini-3.8-flash-tiered",
           token: creds.access_token,
           hasValidSession: !!(creds.access_token || creds.refresh_token),
         });

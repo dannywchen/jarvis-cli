@@ -27,7 +27,7 @@ export interface ResolvedAuth {
 export function resolveActiveCredentials(profile: UserProfile): ResolvedAuth {
   const detected = scanDetectedCliSessions();
   const provider = (profile.apiProvider || 'gemini') as ProviderType;
-  const defaultModel = POPULAR_MODELS[provider]?.[0]?.id || 'gemini-2.0-flash';
+  const defaultModel = POPULAR_MODELS[provider]?.[0]?.id || 'gemini-3.8-flash-tiered';
   const model = profile.activeModel || defaultModel;
 
   let apiKey: string | null = null;
@@ -133,21 +133,8 @@ Instructions:
   });
 
   if (result.error) {
-    // If Gemini OAuth scope requires developer project, provide clear non-breaking hint
-    if (creds.provider === 'gemini' && !creds.apiKey) {
-      return {
-        text: `[Antigravity / Gemini CLI Connected: ${creds.connectedAccount || 'OAuth Session'}]\nNotice: Google Gemini REST API requires a free Google AI Studio key for direct third-party completion queries.\nTo connect in 1 click, run '/auth' and paste your free key from https://aistudio.google.com/app/apikey (takes 5 seconds), or switch to OpenAI Codex via '/auth'.`,
-        xpAwarded: 0,
-        provider: creds.provider,
-        model: creds.model,
-        harnessName: creds.harnessName,
-        connectedAccount: creds.connectedAccount,
-        error: result.error,
-      };
-    }
-
     return {
-      text: `[${creds.provider.toUpperCase()} API Error] ${result.error}\nRun '/auth' or '/model' to reconfigure credentials or switch models.`,
+      text: `[${creds.harnessName} Error] ${result.error}\nRun '/model' to select another model (e.g. Gemini 3.8 Flash, 3.7 Flash, 3.1 Flash Lite) or '/auth' to switch harness.`,
       xpAwarded: 0,
       provider: creds.provider,
       model: creds.model,

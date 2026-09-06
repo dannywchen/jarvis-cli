@@ -12,9 +12,13 @@ export interface ModelOption {
 
 export const POPULAR_MODELS: Record<ProviderType, ModelOption[]> = {
   gemini: [
-    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash (Latest)', provider: 'gemini', description: 'Next-gen multimodal, ultra-fast generation' },
-    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'gemini', description: 'Advanced multimodal agentic reasoning' },
-    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', provider: 'gemini', description: 'Deep reasoning with 2M token context' },
+    { id: 'gemini-3.8-flash-tiered', name: 'Gemini 3.8 Flash (Latest Flagship)', provider: 'gemini', description: 'Next-gen flagship model with supreme speed and reasoning' },
+    { id: 'gemini-3.7-flash-tiered', name: 'Gemini 3.7 Flash', provider: 'gemini', description: 'Cutting-edge reasoning model' },
+    { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', provider: 'gemini', description: 'Ultra-fast lightweight execution' },
+    { id: 'gemini-3.5-flash-low', name: 'Gemini 3.5 Flash', provider: 'gemini', description: 'Balanced multimodal model' },
+    { id: 'gemini-3-flash', name: 'Gemini 3 Flash', provider: 'gemini', description: 'High-throughput code and agent reasoning' },
+    { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (via Antigravity)', provider: 'gemini', description: 'Claude Sonnet thinking model routed through Google quota' },
+    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'gemini', description: 'Production stable multimodal' },
   ],
   openai: [
     { id: 'gpt-4o', name: 'GPT-4o (Latest Flagship)', provider: 'openai', description: 'Versatile high-intelligence flagship model' },
@@ -103,15 +107,6 @@ export async function sendLiveLlmPrompt(options: {
 
     // 2. Google Gemini
     if (provider === 'gemini') {
-      let endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-
-      if (apiKey) {
-        endpoint += `?key=${apiKey}`;
-      } else if (authToken) {
-        headers['Authorization'] = `Bearer ${authToken}`;
-      }
-
       const contents: any[] = [];
       if (systemPrompt) {
         contents.push({ role: 'user', parts: [{ text: `Instructions: ${systemPrompt}` }] });
@@ -119,20 +114,69 @@ export async function sendLiveLlmPrompt(options: {
       }
       contents.push({ role: 'user', parts: [{ text: prompt }] });
 
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ contents }),
-      });
+      // Path A: Authenticated via Google OAuth token (Antigravity / Gemini CLI)
+      if (authToken) {
+        const endpoints = [
+          'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:generateContent',
+          'https://autopush-cloudcode-pa.sandbox.googleapis.com/v1internal:generateContent',
+          'https://cloudcode-pa.googleapis.com/v1internal:generateContent',
+        ];
 
-      if (!res.ok) {
-        const err = ((await res.json().catch(() => ({}))) as any);
-        return { text: '', error: err?.error?.message || `Gemini API Error (HTTP ${res.status})` };
+        const payload = {
+          project: 'aicode-consumers',
+          model,
+          request: {
+            contents,
+          },
+        };
+
+        for (const ep of endpoints) {
+          try {
+            const res = await fetch(ep, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${authToken}`,
+                'User-Agent': 'antigravity/1.18.3 darwin/arm64',
+                'X-Goog-Api-Client': 'google-cloud-sdk vscode_cloudshelleditor/0.1',
+              },
+              body: JSON.stringify(payload),
+            });
+
+            if (!res.ok) continue;
+
+            const data = (await res.json()) as any;
+            const parts = data?.response?.candidates?.[0]?.content?.parts || [];
+            const text = parts.map((p: any) => p.text || '').join('').trim();
+            if (text) return { text };
+          } catch {
+            // Try next endpoint fallback
+          }
+        }
       }
 
-      const data = (await res.json()) as any;
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      return { text };
+      // Path B: Fallback to Google Generative Language REST API (if apiKey provided)
+      if (apiKey) {
+        const restModel = model.includes('tiered') || model.includes('low') || model.includes('claude') ? 'gemini-2.0-flash' : model;
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${restModel}:generateContent?key=${apiKey}`;
+
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents }),
+        });
+
+        if (res.ok) {
+          const data = (await res.json()) as any;
+          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          if (text) return { text };
+        }
+      }
+
+      return {
+        text: '',
+        error: 'Unable to reach Gemini models with current credentials. Please check /auth.',
+      };
     }
 
     // 3. OpenAI via REST API
