@@ -26,6 +26,10 @@ export declare function saveUserProfile(profile: UserProfile): Promise<void>;
 export declare function saveCourse(course: Course): Promise<void>;
 export declare function loadCourse(courseId: string): Promise<Course | null>;
 export declare function listSavedCourses(): Promise<Course[]>;
+/** Remove one persisted course and any spaced-repetition items that belong to it. */
+export declare function deleteCourse(courseId: string): Promise<boolean>;
+/** Remove every saved course, including courses still present in the legacy store. */
+export declare function deleteAllCourses(): Promise<number>;
 export declare function loadReviewItems(): Promise<SpacedReviewItem[]>;
 export declare function saveReviewItems(items: SpacedReviewItem[]): Promise<void>;
 export declare function loadRecentThreads(): Promise<RecentThread[]>;

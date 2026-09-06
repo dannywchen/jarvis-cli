@@ -58,3 +58,11 @@ test('overhauled slash commands resolve /topic, /flashcards, and /help with alia
   assert.equal(topicCmd.argumentHint, 'topic');
   assert.equal(completeSlashCommand('/top', topicCmd), '/topic ');
 });
+
+test('course library commands support deterministic course switching', () => {
+  assert.equal(resolveSlashCommand('/courses')?.name, 'courses');
+  assert.equal(resolveSlashCommand('/course 2')?.name, 'courses');
+  assert.equal(resolveSlashCommand('/switch to alpha')?.name, 'courses');
+  assert.equal(resolveSlashCommand('/focus beta')?.name, 'courses');
+  assert.equal(completeSlashCommand('/cou', resolveSlashCommand('/courses')!), '/courses ');
+});

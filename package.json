@@ -12,7 +12,7 @@
     "build": "tsc",
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
-    "test": "npm run build && tsx --test test/commands.test.ts test/recentThreads.test.ts test/gamification.test.ts && tsx test/cliAuth.test.ts && tsx test/duocode.test.ts && tsx test/topicEngine.test.ts"
+    "test": "npm run build && tsx --test test/commands.test.ts test/chatShell.test.ts test/recentThreads.test.ts test/gamification.test.ts test/promptSecurity.test.ts test/learningEngine.test.ts test/agentTools.test.ts test/courseAgentTools.test.ts && tsx test/cliAuth.test.ts && tsx test/duocode.test.ts && tsx test/topicEngine.test.ts"
   },
   "keywords": [
     "cli",

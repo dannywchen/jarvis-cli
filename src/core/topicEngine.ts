@@ -8,11 +8,14 @@ import {
   Pace,
   SkillNode,
   Lesson,
+  LearningIntent,
 } from '../types/index.js';
 import { resolveActiveCredentials } from './agentWrapper.js';
 import { sendLiveLlmPrompt, DEFAULT_OPENAI_REASONING_EFFORT } from './liveClient.js';
+import { withPromptConfidentiality } from './promptSecurity.js';
 import { getValidGoogleAccessToken } from './cliAuth.js';
 import { saveCourse, saveUserProfile } from './storage.js';
+import { normalizeLearningIntent } from './learningEngine.js';
 
 export interface TopicDecompositionResult extends TopicDecomposition {
   decomposition: TopicDecomposition;
@@ -40,7 +43,8 @@ function extractJsonFromText(text: string): string {
  */
 export function topicDecompositionToCourse(
   decomposition: TopicDecomposition,
-  pace: Pace = 'standard'
+  pace: Pace = 'standard',
+  intent?: LearningIntent
 ): Course {
   const timestamp = Date.now();
   const totalConcepts = decomposition.concepts.length;
@@ -83,6 +87,8 @@ export function topicDecompositionToCourse(
       xpAwarded: 0,
       isCompleted: false,
       crownCount: 0,
+      attemptCount: 0,
+      masteryScore: 0,
     };
 
     return {
@@ -106,6 +112,8 @@ export function topicDecompositionToCourse(
     createdAt: new Date().toISOString(),
     summary: decomposition.overview,
     nodes,
+    intent: normalizeLearningIntent(intent, decomposition.topic),
+    currentNodeId: nodes[0]?.id,
   };
 }
 
@@ -131,7 +139,7 @@ export async function saveDecomposedCourse(
 export async function decomposeTopicIntoConcepts(
   topic: string,
   profile: UserProfile,
-  options?: { forceOffline?: boolean; timeoutMs?: number }
+  options?: { forceOffline?: boolean; timeoutMs?: number; intent?: LearningIntent }
 ): Promise<TopicDecompositionResult> {
   const cleanTopic = topic.trim() || 'Software Architecture';
   const isOfflineForced =
@@ -148,8 +156,17 @@ export async function decomposeTopicIntoConcepts(
           if (refreshed.token) activeToken = refreshed.token;
         }
 
+        const intent = normalizeLearningIntent(options?.intent, cleanTopic);
         const prompt = `Decompose the technical topic "${cleanTopic}" into 4 to 5 progressive Micro-Concepts for a learner.
 Each Micro-Concept must represent a bite-sized, sequential milestone in mastering the topic.
+
+Learner contract:
+- Goal: ${intent.goal}
+- Target outcome: ${intent.targetOutcome}
+- Current level: ${intent.level}
+- Preferred mode: ${intent.preferredMode}
+- Weekly time budget: ${intent.weeklyMinutes} minutes
+Design the sequence so it reaches the target outcome, not just broad topic coverage. Include practical transfer when the preferred mode is practical or project-based.
 
 For each Micro-Concept:
 1. Bite-Sized Digest: Exactly 2 concise paragraphs describing the technical mental model clearly and intuitively.
@@ -201,7 +218,7 @@ Respond STRICTLY with valid JSON matching this schema:
   ]
 }`;
 
-        const systemPrompt = `You are Jarvis CLI, an agentic AI learning engine fusing Duolingo bite-sized gamification with deep technical precision. Return valid raw JSON only.`;
+        const systemPrompt = withPromptConfidentiality(`You are Jarvis CLI, an agentic AI learning engine fusing Duolingo bite-sized gamification with deep technical precision. Return valid raw JSON only.`);
         const timeoutMs = options?.timeoutMs || 8000;
 
         const responsePromise = sendLiveLlmPrompt({
@@ -323,7 +340,7 @@ Respond STRICTLY with valid JSON matching this schema:
             concepts: validatedConcepts,
           };
 
-          const course = topicDecompositionToCourse(decomposition);
+          const course = topicDecompositionToCourse(decomposition, 'standard', intent);
           return {
             ...decomposition,
             decomposition,
@@ -339,7 +356,7 @@ Respond STRICTLY with valid JSON matching this schema:
 
   // 2. Offline Heuristic Fallback
   const decomposition = getHeuristicTopicDecomposition(cleanTopic);
-  const course = topicDecompositionToCourse(decomposition);
+  const course = topicDecompositionToCourse(decomposition, 'standard', options?.intent);
   return {
     ...decomposition,
     decomposition,
@@ -411,7 +428,7 @@ Respond STRICTLY with valid JSON:
   "suggestedImprovement": "Clear actionable improvement tip."
 }`;
 
-        const systemPrompt = 'You are an expert technical evaluator in Jarvis CLI. Return valid raw JSON only.';
+        const systemPrompt = withPromptConfidentiality('You are an expert technical evaluator in Jarvis CLI. Return valid raw JSON only.');
         const timeoutMs = options?.timeoutMs || 8000;
 
         const responsePromise = sendLiveLlmPrompt({

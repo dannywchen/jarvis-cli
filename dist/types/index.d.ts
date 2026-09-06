@@ -1,4 +1,15 @@
 export type Pace = 'accelerated' | 'standard' | 'deep';
+export type LearningLevel = 'beginner' | 'intermediate' | 'advanced';
+export type LearningMode = 'conceptual' | 'practical' | 'exam' | 'project';
+/** The learner's north star. Optional so older courses remain readable. */
+export interface LearningIntent {
+    goal: string;
+    targetOutcome?: string;
+    level?: LearningLevel;
+    preferredMode?: LearningMode;
+    weeklyMinutes?: number;
+    constraints?: string[];
+}
 export type QuestionType = 'multiple-choice' | 'cloze' | 'match' | 'scenario' | 'flashcard' | 'open-ended';
 export interface MatchPair {
     term: string;
@@ -29,6 +40,10 @@ export interface Lesson {
     xpAwarded: number;
     isCompleted: boolean;
     crownCount: number;
+    attemptCount?: number;
+    masteryScore?: number;
+    lastAttemptAt?: string;
+    completedQuestionIds?: string[];
 }
 export interface SkillNode {
     id: string;
@@ -49,6 +64,22 @@ export interface Course {
     createdAt: string;
     nodes: SkillNode[];
     summary: string;
+    intent?: LearningIntent;
+    currentNodeId?: string;
+    lastStudiedAt?: string;
+}
+export type CourseNextAction = 'lesson' | 'review' | 'complete';
+export interface CourseProgress {
+    completedNodes: number;
+    totalNodes: number;
+    completedLessons: number;
+    totalLessons: number;
+    progressPercentage: number;
+    currentNodeId?: string;
+    currentLessonId?: string;
+    nextAction: CourseNextAction;
+    dueReviewCount: number;
+    estimatedMinutesRemaining: number;
 }
 export interface MicroConcept {
     id: string;

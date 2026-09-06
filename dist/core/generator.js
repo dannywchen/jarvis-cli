@@ -1,4 +1,5 @@
 import { generateCurriculumWithLlm } from './ai.js';
+import { normalizeLearningIntent } from './learningEngine.js';
 /**
  * Extracts key technical definitions and sentences from the text.
  */
@@ -119,6 +120,8 @@ export async function generateCourse(doc, pace = 'standard', config) {
         createdAt: new Date().toISOString(),
         summary: `Comprehensive ${pace} learning track synthesized from ${doc.title} (${doc.wordCount} words).`,
         nodes,
+        intent: normalizeLearningIntent(config?.intent, doc.title),
+        currentNodeId: nodes[0]?.id,
     };
 }
 function generateBiteSizedLesson(id, title, contentSnippet, facts, keywords, isBoss) {

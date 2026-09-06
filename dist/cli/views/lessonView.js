@@ -9,6 +9,10 @@ import { evaluateOpenEndedAnswer } from '../../core/topicEngine.js';
 import { detectAgentEnvironment } from '../../core/agentBridge.js';
 export async function runLesson(lesson, node, course, profile) {
     console.clear();
+    course.currentNodeId = node.id;
+    course.lastStudiedAt = new Date().toISOString();
+    lesson.attemptCount = (lesson.attemptCount || 0) + 1;
+    lesson.lastAttemptAt = course.lastStudiedAt;
     const agentInfo = detectAgentEnvironment();
     // 1. Lesson Header (OpenCode Minimalist)
     console.log('\n  ' + chalk.hex('#F8FAFC').bold(`[LESSON] ${lesson.title.toUpperCase()}`));
@@ -104,6 +108,7 @@ export async function runLesson(lesson, node, course, profile) {
                 const evalResult = await evaluateAnswerWithAi(q, freeform, {
                     provider: profile.apiProvider,
                     apiKey: profile.apiKey,
+                    model: profile.activeModel,
                 });
                 spinner.stop('Evaluation complete:');
                 isCorrect = evalResult.isCorrect;
@@ -129,6 +134,7 @@ export async function runLesson(lesson, node, course, profile) {
             const evalResult = await evaluateAnswerWithAi(q, cleanInput, {
                 provider: profile.apiProvider,
                 apiKey: profile.apiKey,
+                model: profile.activeModel,
             });
             spinner.stop('Graded:');
             isCorrect = evalResult.isCorrect;
@@ -292,15 +298,20 @@ export async function runLesson(lesson, node, course, profile) {
     const flawlessBonus = isFlawless ? 25 : 0;
     totalXp += flawlessBonus;
     const xpResult = awardXp(profile, totalXp);
-    profile.completedLessonsCount += 1;
+    const wasAlreadyCompleted = lesson.isCompleted;
+    if (!wasAlreadyCompleted)
+        profile.completedLessonsCount += 1;
     lesson.isCompleted = true;
     lesson.crownCount += 1;
+    lesson.masteryScore = Math.round((correctCount / Math.max(1, totalQuestions)) * 100);
+    lesson.completedQuestionIds = lesson.questions.map((question) => question.id);
     // Unlock next node in course
     const currentIndex = course.nodes.findIndex((n) => n.id === node.id);
     if (currentIndex >= 0 && currentIndex + 1 < course.nodes.length) {
         if (course.nodes[currentIndex + 1].status === 'locked') {
             course.nodes[currentIndex + 1].status = 'active';
         }
+        course.currentNodeId = course.nodes[currentIndex + 1].id;
     }
     // Check node mastery
     if (lesson.crownCount >= 2) {

@@ -1,4 +1,5 @@
 import { executeAntigravityPrompt, executeCodexPrompt } from './cliAuth.js';
+import { redactSensitiveOutput } from './promptSecurity.js';
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-luna';
 export const DEFAULT_OPENAI_REASONING_EFFORT = 'high';
 export const POPULAR_MODELS = {
@@ -117,7 +118,8 @@ export async function sendLiveLlmPrompt(options) {
         // 1. If OpenAI with Codex CLI harness: invoke local codex agent
         if (provider === 'openai' && harness === 'codex-cli') {
             const fullPrompt = systemPrompt ? `${systemPrompt}\n\nTask: ${prompt}` : prompt;
-            return await executeCodexPrompt(fullPrompt, model, selectedReasoningEffort);
+            const result = await executeCodexPrompt(fullPrompt, model, selectedReasoningEffort);
+            return result.text ? { ...result, text: redactSensitiveOutput(result.text) } : result;
         }
         // 2. Google Gemini
         if (provider === 'gemini') {
@@ -130,7 +132,8 @@ export async function sendLiveLlmPrompt(options) {
             // Path A: Authenticated via Google OAuth token (Antigravity / Gemini CLI)
             if (harness === 'antigravity-cli') {
                 const fullPrompt = systemPrompt ? `${systemPrompt}\n\nTask: ${prompt}` : prompt;
-                return await executeAntigravityPrompt(fullPrompt, getAntigravityModelId(model));
+                const result = await executeAntigravityPrompt(fullPrompt, getAntigravityModelId(model));
+                return result.text ? { ...result, text: redactSensitiveOutput(result.text) } : result;
             }
             if (authToken) {
                 const codeAssistModel = getGeminiCodeAssistModelId(model);
@@ -177,7 +180,7 @@ export async function sendLiveLlmPrompt(options) {
                             };
                         }
                         if (text)
-                            return { text };
+                            return { text: redactSensitiveOutput(text) };
                         endpointErrors.push({ status: 502, message: 'Google returned an empty response.' });
                     }
                     catch (error) {
@@ -208,7 +211,7 @@ export async function sendLiveLlmPrompt(options) {
                 if (res.ok) {
                     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
                     if (text)
-                        return { text };
+                        return { text: redactSensitiveOutput(text) };
                 }
                 return {
                     text: '',
@@ -249,7 +252,7 @@ export async function sendLiveLlmPrompt(options) {
             }
             const data = (await res.json());
             const text = data?.choices?.[0]?.message?.content || '';
-            return { text };
+            return { text: redactSensitiveOutput(text) };
         }
         // 4. Anthropic Claude
         if (provider === 'anthropic') {
@@ -276,7 +279,7 @@ export async function sendLiveLlmPrompt(options) {
             }
             const data = (await res.json());
             const text = data?.content?.[0]?.text || '';
-            return { text };
+            return { text: redactSensitiveOutput(text) };
         }
     }
     catch (err) {

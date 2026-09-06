@@ -8,13 +8,15 @@ import {
   saveUserProfile,
   loadCourse,
   saveCourse,
+  listSavedCourses,
 } from './core/storage.js';
 import { renderRoadmap } from './cli/views/roadmapView.js';
 import { renderStats } from './cli/views/statsView.js';
 import { runLesson } from './cli/views/lessonView.js';
 import { runPracticeSession } from './cli/views/reviewView.js';
 import { decomposeTopicIntoConcepts } from './core/topicEngine.js';
-import { Pace } from './types/index.js';
+import { LearningIntent, Pace } from './types/index.js';
+import { activateCourse, getCourseProgress, normalizeLearningIntent, selectCourse } from './core/learningEngine.js';
 
 const program = new Command();
 
@@ -39,6 +41,8 @@ program
   .command('load <file>')
   .description('Ingest a PDF, Markdown, or text document and build a gamified skill tree')
   .option('-p, --pace <pace>', 'Roadmap pace: accelerated, standard, or deep', 'standard')
+  .option('-g, --goal <goal>', 'What you want to be able to do with this material')
+  .option('--level <level>', 'beginner, intermediate, or advanced', 'intermediate')
   .action(async (file, options) => {
     try {
       console.log(chalk.cyan(`\n✦ Jarvis CLI Ingestion: Reading "${file}"...`));
@@ -48,11 +52,15 @@ program
         : 'standard') as Pace;
 
       console.log(chalk.dim(`✦ Generating ${pace.toUpperCase()} curriculum from ${doc.wordCount} words...`));
-      const course = await generateCourse(doc, pace);
+      const intent = normalizeLearningIntent({
+        goal: options.goal,
+        level: ['beginner', 'intermediate', 'advanced'].includes(options.level) ? options.level : 'intermediate',
+      } as Partial<LearningIntent>, doc.title);
+      const course = await generateCourse(doc, pace, { intent });
 
       await saveCourse(course);
       const profile = await loadUserProfile();
-      profile.activeCourseId = course.id;
+      activateCourse(profile, course);
       await saveUserProfile(profile);
 
       console.log(chalk.green.bold(`\n✓ Roadmap created successfully: "${course.title}" (${course.nodes.length} nodes)`));
@@ -68,14 +76,20 @@ program
 program
   .command('topic <topic...>')
   .description('Decompose any technical topic into bite-sized Duolingo-style micro-concepts and learn')
-  .action(async (topicParts) => {
+  .option('-g, --goal <goal>', 'What you want to be able to do with this topic')
+  .option('--level <level>', 'beginner, intermediate, or advanced', 'intermediate')
+  .action(async (topicParts, options) => {
     const topic = Array.isArray(topicParts) ? topicParts.join(' ') : topicParts;
     try {
       console.log(chalk.cyan(`\n✦ Decomposing topic: "${topic}" into progressive micro-concepts...`));
       const profile = await loadUserProfile();
-      const result = await decomposeTopicIntoConcepts(topic, profile);
+      const intent = normalizeLearningIntent({
+        goal: options.goal,
+        level: ['beginner', 'intermediate', 'advanced'].includes(options.level) ? options.level : 'intermediate',
+      } as Partial<LearningIntent>, topic);
+      const result = await decomposeTopicIntoConcepts(topic, profile, { intent });
+      activateCourse(profile, result.course);
       await saveCourse(result.course);
-      profile.activeCourseId = result.course.id;
       await saveUserProfile(profile);
 
       console.log(chalk.green.bold(`\n✓ Roadmap created successfully: "${result.topic}" (${result.concepts.length} micro-concepts)`));
@@ -110,6 +124,40 @@ program
       return;
     }
     renderRoadmap(course);
+  });
+
+// Command: courses [selector]
+program
+  .command('courses [selector]')
+  .alias('switch')
+  .description('List saved courses or switch the active learning focus')
+  .action(async (selector) => {
+    const profile = await loadUserProfile();
+    const courses = await listSavedCourses();
+    if (!courses.length) {
+      console.log(chalk.yellow('\nNo saved courses yet. Run "jarvis topic <subject>" or "jarvis load <file>" first.\n'));
+      return;
+    }
+    if (!selector) {
+      console.log(chalk.cyan('\nSaved courses:'));
+      for (const [index, course] of courses.entries()) {
+        const progress = getCourseProgress(course);
+        const marker = course.id === profile.activeCourseId ? '*' : ' ';
+        console.log(` ${marker} ${index + 1}. ${course.title} · ${progress.progressPercentage}% · ${course.pace}`);
+      }
+      console.log(chalk.dim('\nSwitch with: jarvis courses <number>\n'));
+      return;
+    }
+    const selected = selectCourse(courses, selector);
+    if (!selected) {
+      console.log(chalk.red(`\nCourse "${selector}" was not found. Run "jarvis courses" to see the library.\n`));
+      return;
+    }
+    activateCourse(profile, selected);
+    await saveCourse(selected);
+    await saveUserProfile(profile);
+    console.log(chalk.green(`\n✓ Active course: ${selected.title}`));
+    renderRoadmap(selected);
   });
 
 // Command: learn
@@ -189,12 +237,26 @@ agent
   });
 
 agent
+  .command('courses [selector]')
+  .alias('switch')
+  .description('List saved courses or switch the active course and return JSON')
+  .action(async (selector) => {
+    const { handleAgentCourses } = await import('./cli/agentMode.js');
+    await handleAgentCourses(selector);
+  });
+
+agent
   .command('ingest <file>')
   .description('Ingest a document and return JSON course structure')
   .option('-p, --pace <pace>', 'accelerated, standard, or deep', 'standard')
+  .option('-g, --goal <goal>', 'What the learner wants to be able to do')
+  .option('--level <level>', 'beginner, intermediate, or advanced', 'intermediate')
   .action(async (file, opts) => {
     const { handleAgentIngest } = await import('./cli/agentMode.js');
-    await handleAgentIngest(file, opts.pace as Pace);
+    await handleAgentIngest(file, opts.pace as Pace, {
+      goal: opts.goal || undefined,
+      level: ['beginner', 'intermediate', 'advanced'].includes(opts.level) ? opts.level : 'intermediate',
+    } as LearningIntent);
   });
 
 agent
@@ -226,10 +288,15 @@ agent
 agent
   .command('decompose <topic...>')
   .description('Decompose a topic into micro-concepts in JSON for agent tutoring')
-  .action(async (topicParts) => {
+  .option('-g, --goal <goal>', 'What the learner wants to be able to do')
+  .option('--level <level>', 'beginner, intermediate, or advanced', 'intermediate')
+  .action(async (topicParts, opts) => {
     const topic = Array.isArray(topicParts) ? topicParts.join(' ') : topicParts;
     const { handleAgentDecompose } = await import('./cli/agentMode.js');
-    await handleAgentDecompose(topic);
+    await handleAgentDecompose(topic, {
+      goal: opts.goal || undefined,
+      level: ['beginner', 'intermediate', 'advanced'].includes(opts.level) ? opts.level : 'intermediate',
+    } as LearningIntent);
   });
 
 program.parse(process.argv);

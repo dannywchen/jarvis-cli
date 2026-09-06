@@ -1,10 +1,12 @@
 import { parseDocument } from '../core/parser.js';
 import { generateCourse } from '../core/generator.js';
 import { decomposeTopicIntoConcepts } from '../core/topicEngine.js';
-import { loadUserProfile, saveUserProfile, loadCourse, saveCourse, } from '../core/storage.js';
+import { loadUserProfile, saveUserProfile, loadCourse, saveCourse, listSavedCourses, } from '../core/storage.js';
 import { awardXp, checkNewAchievements, updateStreak } from '../core/gamification.js';
 import { evaluateAnswerWithAi } from '../core/ai.js';
 import { getDueReviews } from '../core/spacedRepetition.js';
+import { registerReviewItem } from '../core/spacedRepetition.js';
+import { activateCourse, buildLearningContext, getCourseProgress, normalizeLearningIntent, selectCourse } from '../core/learningEngine.js';
 export async function handleAgentStatus() {
     const profile = await loadUserProfile();
     updateStreak(profile);
@@ -14,6 +16,7 @@ export async function handleAgentStatus() {
         activeCourse = await loadCourse(profile.activeCourseId);
     }
     const dueReviews = await getDueReviews();
+    const progress = activeCourse ? getCourseProgress(activeCourse, dueReviews.length) : null;
     const status = {
         profile: {
             name: profile.name,
@@ -35,21 +38,25 @@ export async function handleAgentStatus() {
                 totalNodes: activeCourse.nodes.length,
                 completedNodes: activeCourse.nodes.filter((n) => n.status === 'completed' || n.status === 'mastered').length,
                 currentNode: activeCourse.nodes.find((n) => n.status === 'active') || null,
+                intent: activeCourse.intent,
+                progress,
             }
             : null,
         dueReviewsCount: dueReviews.length,
+        learningContext: buildLearningContext(activeCourse, dueReviews.length),
     };
     console.log(JSON.stringify(status, null, 2));
 }
-export async function handleAgentIngest(filePath, pace = 'standard') {
+export async function handleAgentIngest(filePath, pace = 'standard', intent) {
     const doc = await parseDocument(filePath);
     const profile = await loadUserProfile();
     const course = await generateCourse(doc, pace, {
         provider: profile.apiProvider,
         apiKey: profile.apiKey,
+        intent: normalizeLearningIntent(intent, doc.title),
     });
+    activateCourse(profile, course);
     await saveCourse(course);
-    profile.activeCourseId = course.id;
     await saveUserProfile(profile);
     const result = {
         success: true,
@@ -84,6 +91,8 @@ export async function handleAgentLesson(nodeId) {
     console.log(JSON.stringify({
         courseId: course.id,
         courseTitle: course.title,
+        intent: course.intent,
+        progress: getCourseProgress(course),
         node: {
             id: targetNode.id,
             title: targetNode.title,
@@ -129,6 +138,10 @@ export async function handleAgentSubmitAnswer(options) {
     const lesson = options.lessonId
         ? node.lessons.find((l) => l.id === options.lessonId)
         : node.lessons.find((l) => !l.isCompleted) || node.lessons[0];
+    if (!lesson) {
+        console.log(JSON.stringify({ error: 'Lesson not found' }));
+        return;
+    }
     const question = lesson?.questions.find((q) => q.id === options.questionId);
     if (!question) {
         console.log(JSON.stringify({ error: 'Question not found' }));
@@ -137,17 +150,45 @@ export async function handleAgentSubmitAnswer(options) {
     const evalResult = await evaluateAnswerWithAi(question, options.answer, {
         provider: profile.apiProvider,
         apiKey: profile.apiKey,
+        model: profile.activeModel,
     });
     let xpEarned = 0;
+    const now = new Date().toISOString();
+    lesson.attemptCount = (lesson.attemptCount || 0) + 1;
+    lesson.lastAttemptAt = now;
     if (evalResult.isCorrect) {
         xpEarned = Math.round((question.xpReward * evalResult.scorePercentage) / 100);
         awardXp(profile, xpEarned);
+        const completedQuestionIds = new Set(lesson.completedQuestionIds || []);
+        completedQuestionIds.add(question.id);
+        lesson.completedQuestionIds = [...completedQuestionIds];
     }
     else {
         if (!profile.zenMode) {
             profile.hearts = Math.max(0, profile.hearts - 1);
         }
+        await registerReviewItem({
+            id: `review_${course.id}_${question.id}`,
+            nodeId: node.id,
+            courseId: course.id,
+            questionId: question.id,
+            conceptTitle: node.title,
+        });
     }
+    lesson.masteryScore = Math.round(((lesson.completedQuestionIds || []).length / Math.max(1, lesson.questions.length)) * 100);
+    if (lesson.completedQuestionIds?.length === lesson.questions.length && !lesson.isCompleted) {
+        lesson.isCompleted = true;
+        lesson.crownCount += 1;
+        profile.completedLessonsCount += 1;
+        node.status = 'completed';
+        const currentIndex = course.nodes.findIndex((item) => item.id === node.id);
+        const nextNode = currentIndex >= 0 ? course.nodes[currentIndex + 1] : undefined;
+        if (nextNode) {
+            nextNode.status = nextNode.status === 'locked' ? 'active' : nextNode.status;
+            course.currentNodeId = nextNode.id;
+        }
+    }
+    course.lastStudiedAt = now;
     const achievements = checkNewAchievements(profile);
     await saveCourse(course);
     await saveUserProfile(profile);
@@ -161,14 +202,20 @@ export async function handleAgentSubmitAnswer(options) {
         heartsRemaining: profile.hearts,
         feedback: evalResult.feedback,
         suggestedImprovement: evalResult.suggestedImprovement,
+        lessonProgress: {
+            completed: lesson.isCompleted,
+            masteryScore: lesson.masteryScore,
+            completedQuestionCount: lesson.completedQuestionIds?.length || 0,
+            totalQuestionCount: lesson.questions.length,
+        },
         unlockedAchievements: achievements,
     }, null, 2));
 }
-export async function handleAgentDecompose(topic) {
+export async function handleAgentDecompose(topic, intent) {
     const profile = await loadUserProfile();
-    const result = await decomposeTopicIntoConcepts(topic, profile);
+    const result = await decomposeTopicIntoConcepts(topic, profile, { intent: normalizeLearningIntent(intent, topic) });
+    activateCourse(profile, result.course);
     await saveCourse(result.course);
-    profile.activeCourseId = result.course.id;
     await saveUserProfile(profile);
     console.log(JSON.stringify({
         success: true,
@@ -193,6 +240,37 @@ export async function handleAgentDecompose(topic) {
                 xpReward: q.xpReward,
                 minSentences: q.minSentences,
             })),
+        })),
+    }, null, 2));
+}
+/** Machine-readable course library and active-course switcher. */
+export async function handleAgentCourses(selector) {
+    const profile = await loadUserProfile();
+    const courses = await listSavedCourses();
+    if (!courses.length) {
+        console.log(JSON.stringify({ courses: [], activeCourseId: null, message: 'No saved courses.' }, null, 2));
+        return;
+    }
+    if (selector) {
+        const selected = selectCourse(courses, selector);
+        if (!selected) {
+            console.log(JSON.stringify({ error: 'Course not found', selector, availableCourseIds: courses.map((course) => course.id) }, null, 2));
+            return;
+        }
+        activateCourse(profile, selected);
+        await saveCourse(selected);
+        await saveUserProfile(profile);
+    }
+    console.log(JSON.stringify({
+        activeCourseId: profile.activeCourseId || null,
+        courses: courses.map((course, index) => ({
+            index: index + 1,
+            id: course.id,
+            title: course.title,
+            pace: course.pace,
+            intent: course.intent,
+            progress: getCourseProgress(course),
+            active: course.id === profile.activeCourseId,
         })),
     }, null, 2));
 }

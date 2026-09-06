@@ -17,6 +17,11 @@ export async function runLesson(
 ): Promise<{ success: boolean; xpEarned: number }> {
   console.clear();
 
+  course.currentNodeId = node.id;
+  course.lastStudiedAt = new Date().toISOString();
+  lesson.attemptCount = (lesson.attemptCount || 0) + 1;
+  lesson.lastAttemptAt = course.lastStudiedAt;
+
   const agentInfo = detectAgentEnvironment();
 
   // 1. Lesson Header (OpenCode Minimalist)
@@ -136,6 +141,7 @@ export async function runLesson(
         const evalResult = await evaluateAnswerWithAi(q, freeform as string, {
           provider: profile.apiProvider,
           apiKey: profile.apiKey,
+          model: profile.activeModel,
         });
 
         spinner.stop('Evaluation complete:');
@@ -164,6 +170,7 @@ export async function runLesson(
       const evalResult = await evaluateAnswerWithAi(q, cleanInput, {
         provider: profile.apiProvider,
         apiKey: profile.apiKey,
+        model: profile.activeModel,
       });
 
       spinner.stop('Graded:');
@@ -364,9 +371,12 @@ export async function runLesson(
   totalXp += flawlessBonus;
 
   const xpResult = awardXp(profile, totalXp);
-  profile.completedLessonsCount += 1;
+  const wasAlreadyCompleted = lesson.isCompleted;
+  if (!wasAlreadyCompleted) profile.completedLessonsCount += 1;
   lesson.isCompleted = true;
   lesson.crownCount += 1;
+  lesson.masteryScore = Math.round((correctCount / Math.max(1, totalQuestions)) * 100);
+  lesson.completedQuestionIds = lesson.questions.map((question) => question.id);
 
   // Unlock next node in course
   const currentIndex = course.nodes.findIndex((n) => n.id === node.id);
@@ -374,6 +384,7 @@ export async function runLesson(
     if (course.nodes[currentIndex + 1].status === 'locked') {
       course.nodes[currentIndex + 1].status = 'active';
     }
+    course.currentNodeId = course.nodes[currentIndex + 1].id;
   }
 
   // Check node mastery

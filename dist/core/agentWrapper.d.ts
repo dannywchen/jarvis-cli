@@ -1,5 +1,6 @@
 import { UserProfile, Course, Question } from '../types/index.js';
 import { ProviderType } from './liveClient.js';
+import { AgentActivitySink } from './agentTools.js';
 export interface AgentResponse {
     text: string;
     xpAwarded: number;
@@ -10,6 +11,11 @@ export interface AgentResponse {
     connectedAccount?: string;
     error?: string;
     requiresAuth?: boolean;
+}
+export interface QueryActiveAgentOptions {
+    onActivity?: AgentActivitySink;
+    /** The current raw user turn, kept separate from the trusted continuation context. */
+    userQuery?: string;
 }
 export interface RelevanceEvaluation {
     xpAwarded: number;
@@ -30,7 +36,8 @@ export declare function resolveActiveCredentials(profile: UserProfile): Resolved
 /**
  * Sends prompt directly to the live LLM / CLI agent harness without hardcoded responses.
  */
-export declare function queryActiveAgent(query: string, profile: UserProfile, activeCourse?: Course | null): Promise<AgentResponse>;
+export declare function queryActiveAgent(query: string, profile: UserProfile, activeCourse?: Course | null, options?: QueryActiveAgentOptions): Promise<AgentResponse>;
+export declare function shouldUseWorkspaceTools(query: string): boolean;
 /**
  * Agentic query relevance evaluator:
  * - Casual banter / gibberish ("helo", "hey", "asdf", "lol", "what model are you") -> 0 XP!

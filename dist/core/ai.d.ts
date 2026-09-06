@@ -1,11 +1,12 @@
 import { ParsedDocument } from './parser.js';
-import { Course, Pace, Question, AnswerEvaluation } from '../types/index.js';
+import { Course, Pace, Question, AnswerEvaluation, LearningIntent } from '../types/index.js';
 import { evaluateOpenEndedAnswer } from './topicEngine.js';
 export { evaluateOpenEndedAnswer };
 export interface LlmConfig {
     provider?: 'gemini' | 'anthropic' | 'openai';
     apiKey?: string;
     model?: string;
+    intent?: LearningIntent;
 }
 export type { AnswerEvaluation };
 /**

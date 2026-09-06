@@ -1,5 +1,6 @@
 import { UserProfile } from '../types/index.js';
 import { executeAntigravityPrompt, executeCodexPrompt } from './cliAuth.js';
+import { redactSensitiveOutput } from './promptSecurity.js';
 
 export type ProviderType = 'gemini' | 'openai' | 'anthropic';
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -148,7 +149,8 @@ export async function sendLiveLlmPrompt(options: {
     // 1. If OpenAI with Codex CLI harness: invoke local codex agent
     if (provider === 'openai' && harness === 'codex-cli') {
       const fullPrompt = systemPrompt ? `${systemPrompt}\n\nTask: ${prompt}` : prompt;
-      return await executeCodexPrompt(fullPrompt, model, selectedReasoningEffort);
+      const result = await executeCodexPrompt(fullPrompt, model, selectedReasoningEffort);
+      return result.text ? { ...result, text: redactSensitiveOutput(result.text) } : result;
     }
 
     // 2. Google Gemini
@@ -163,7 +165,8 @@ export async function sendLiveLlmPrompt(options: {
       // Path A: Authenticated via Google OAuth token (Antigravity / Gemini CLI)
       if (harness === 'antigravity-cli') {
         const fullPrompt = systemPrompt ? `${systemPrompt}\n\nTask: ${prompt}` : prompt;
-        return await executeAntigravityPrompt(fullPrompt, getAntigravityModelId(model));
+        const result = await executeAntigravityPrompt(fullPrompt, getAntigravityModelId(model));
+        return result.text ? { ...result, text: redactSensitiveOutput(result.text) } : result;
       }
 
       if (authToken) {
@@ -214,7 +217,7 @@ export async function sendLiveLlmPrompt(options: {
                 error: `${model} is not available through your Google Code Assist session. Choose another model with /model, or use a Gemini API key if that model is available to your API project.`,
               };
             }
-            if (text) return { text };
+            if (text) return { text: redactSensitiveOutput(text) };
             endpointErrors.push({ status: 502, message: 'Google returned an empty response.' });
           } catch (error: any) {
             endpointErrors.push({ status: 0, message: error?.message || 'Network request failed.' });
@@ -247,7 +250,7 @@ export async function sendLiveLlmPrompt(options: {
         const data = (await res.json().catch(() => ({}))) as any;
         if (res.ok) {
           const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          if (text) return { text };
+          if (text) return { text: redactSensitiveOutput(text) };
         }
 
         return {
@@ -294,7 +297,7 @@ export async function sendLiveLlmPrompt(options: {
 
       const data = (await res.json()) as any;
       const text = data?.choices?.[0]?.message?.content || '';
-      return { text };
+      return { text: redactSensitiveOutput(text) };
     }
 
     // 4. Anthropic Claude
@@ -325,7 +328,7 @@ export async function sendLiveLlmPrompt(options: {
 
       const data = (await res.json()) as any;
       const text = data?.content?.[0]?.text || '';
-      return { text };
+      return { text: redactSensitiveOutput(text) };
     }
   } catch (err: any) {
     return { text: '', error: err.message || 'Request failed' };

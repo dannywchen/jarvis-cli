@@ -1,20 +1,25 @@
 import chalk from 'chalk';
 import { Course, SkillNode } from '../../types/index.js';
+import { getCourseProgress, normalizeLearningIntent } from '../../core/learningEngine.js';
 
 export function renderRoadmap(course: Course): void {
   console.log('');
   console.log(chalk.hex('#F8FAFC').bold(`  ROADMAP: ${course.title.toUpperCase()}`));
   console.log(chalk.hex('#64748B')(`  ${course.summary} · PACE: [${course.pace.toUpperCase()}]`));
+  const intent = normalizeLearningIntent(course.intent, course.title);
+  const progress = getCourseProgress(course);
+  console.log(chalk.hex('#94A3B8')(`  Goal: ${intent.goal}`));
+  console.log(chalk.hex('#94A3B8')(`  Target: ${intent.targetOutcome} · Level: ${intent.level} · Mode: ${intent.preferredMode}`));
   console.log('');
 
-  const completedCount = course.nodes.filter((n) => n.status === 'completed' || n.status === 'mastered').length;
-  const progressPct = Math.round((completedCount / course.nodes.length) * 100);
+  const completedCount = progress.completedNodes;
+  const progressPct = progress.totalNodes ? Math.round((completedCount / progress.totalNodes) * 100) : 0;
 
   // Clean ASCII progress bar
   const totalSlots = 24;
   const filledSlots = Math.round((progressPct / 100) * totalSlots);
   const progressBar = chalk.hex('#E2E8F0')('■'.repeat(filledSlots)) + chalk.hex('#334155')('·'.repeat(totalSlots - filledSlots));
-  console.log(`  Progress [${progressBar}] ${progressPct}% (${completedCount}/${course.nodes.length} nodes)\n`);
+  console.log(`  Progress [${progressBar}] ${progressPct}% (${completedCount}/${course.nodes.length} nodes) · ~${progress.estimatedMinutesRemaining} min left\n`);
 
   // Group nodes by unit
   const unitsMap = new Map<string, { title: string; nodes: SkillNode[] }>();

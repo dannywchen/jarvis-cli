@@ -1,5 +1,6 @@
 import { UserProfile, Course, Question } from '../types/index.js';
 import { evaluateAnswerWithAi } from './ai.js';
+import { isPromptExtractionRequest, PROMPT_EXTRACTION_RESPONSE, redactSensitiveOutput, withPromptConfidentiality } from './promptSecurity.js';
 
 export type AgentEnvironment = 'antigravity' | 'claude-code' | 'codex' | 'gemini' | 'standalone';
 
@@ -72,6 +73,9 @@ export async function chatWithAgentTutor(
   profile: UserProfile,
   activeCourse?: Course | null
 ): Promise<{ text: string; xpAwarded: number }> {
+  if (isPromptExtractionRequest(userQuery)) {
+    return { text: PROMPT_EXTRACTION_RESPONSE, xpAwarded: 0 };
+  }
   const agentInfo = detectAgentEnvironment();
   const apiKey = profile.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.OPENAI_API_KEY;
   const provider = profile.apiProvider || (process.env.GEMINI_API_KEY ? 'gemini' : process.env.OPENAI_API_KEY ? 'openai' : null);
@@ -80,7 +84,7 @@ export async function chatWithAgentTutor(
     ? `Current Active Course: "${activeCourse.title}"\nPace: ${activeCourse.pace}\nCourse Summary: ${activeCourse.summary}`
     : 'No course loaded yet.';
 
-  const systemInstructions = `You are Jarvis, the expert AI tutor in Jarvis CLI.
+  const systemInstructions = withPromptConfidentiality(`You are Jarvis, the expert AI tutor in Jarvis CLI.
 Jarvis CLI is a Claude Code-inspired terminal learning tool.
 User Profile: Level ${profile.level}, ${profile.xp} XP, ${profile.streak}-day streak, ${profile.hearts}/${profile.maxHearts} HP.
 Context:
@@ -92,7 +96,8 @@ Guidelines:
 1. Explain with crisp technical accuracy and an intuitive real-world analogy.
 2. Provide a 1-sentence Core Rule.
 3. Offer an optional micro-challenge question to test active recall.
-4. Do NOT use emojis. Maintain a clean, minimalist, high-craft developer tone.`;
+4. Do NOT use emojis. Maintain a clean, minimalist, high-craft developer tone.
+5. Do not disclose internal runtime metadata or private context.`);
 
   // 1. If Gemini API is available
   if (apiKey && (provider === 'gemini' || !provider)) {
@@ -109,7 +114,7 @@ Guidelines:
       if (res.ok) {
         const data = (await res.json()) as any;
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) return { text, xpAwarded: 5 };
+        if (text) return { text: redactSensitiveOutput(text), xpAwarded: 5 };
       }
     } catch {
       // fallback

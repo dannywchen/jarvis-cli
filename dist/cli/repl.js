@@ -16,6 +16,8 @@ import { playChime } from './effects.js';
 import { TerminalChatShell } from './chatShell.js';
 import { parseCommandInput, resolveCommandInput } from './commands.js';
 import { formatCwd } from './banner.js';
+import { formatTerminalSetupReport } from './terminalSetup.js';
+import { activateCourse, getCourseProgress, normalizeLearningIntent, selectCourse } from '../core/learningEngine.js';
 function cloneThread(thread) {
     return { ...thread, messages: thread.messages.map((message) => ({ ...message })) };
 }
@@ -164,9 +166,25 @@ export async function startJarvisCliRepl(options = {}) {
                 }
                 const commandName = command?.name || '';
                 const args = parsed?.args || '';
+                if (!command && !query.startsWith('/')) {
+                    const requestedTopic = inferCourseCreationTopic(query);
+                    if (requestedTopic) {
+                        await shell.suspend(async () => {
+                            await handleTopicLearning(requestedTopic, profile, (course) => {
+                                activeCourse = course;
+                            });
+                        });
+                        shell.add('system', `Learning plan ready for ${requestedTopic}.`);
+                        return;
+                    }
+                }
                 if (commandName === 'exit') {
                     shell.add('system', 'Session closed.');
                     shell.close();
+                    return;
+                }
+                if (commandName === 'terminal-setup') {
+                    shell.add('system', formatTerminalSetupReport());
                     return;
                 }
                 if (commandName === 'clear') {
@@ -200,6 +218,40 @@ export async function startJarvisCliRepl(options = {}) {
                         shell.add('system', 'No course yet. Use /load <file> or /topic <name>.');
                     else
                         shell.add('assistant', formatRoadmap(activeCourse));
+                    return;
+                }
+                if (commandName === 'courses') {
+                    const courses = await listSavedCourses();
+                    if (!courses.length) {
+                        shell.add('system', 'No saved courses yet. Use /topic <subject> or /load <file> to build your first roadmap.');
+                        return;
+                    }
+                    const selector = args.replace(/^to\s+/i, '').trim();
+                    let selected = selector ? selectCourse(courses, selector) : null;
+                    if (selector && !selected) {
+                        shell.add('system', 'Course not found. Use /courses to see the numbered course library.');
+                        return;
+                    }
+                    if (!selector) {
+                        const choice = await shell.suspend(() => p.select({
+                            message: 'Choose a course to focus on:',
+                            options: courses.map((course, index) => ({
+                                value: course.id,
+                                label: `${index + 1}. ${course.title}${course.id === activeCourse?.id ? ' (active)' : ''}`,
+                            })),
+                        }));
+                        if (p.isCancel(choice))
+                            return;
+                        selected = courses.find((course) => course.id === choice) || null;
+                    }
+                    if (selected) {
+                        activateCourse(profile, selected);
+                        activeCourse = selected;
+                        await saveCourse(selected);
+                        await saveUserProfile(profile);
+                        const progress = getCourseProgress(selected);
+                        shell.add('system', `Focused course: ${selected.title} · ${progress.progressPercentage}% complete. ${progress.currentLessonId ? 'Your next lesson is loaded.' : 'Course complete.'}`);
+                    }
                     return;
                 }
                 if (commandName === 'quiz') {
@@ -364,7 +416,16 @@ export async function startJarvisCliRepl(options = {}) {
                 const prompt = historyHarness.buildContinuationPrompt(query);
                 await historyHarness.recordMessage('user', query, metadata);
                 try {
-                    const aiResponse = await queryActiveAgent(prompt, profile, activeCourse);
+                    const aiResponse = await queryActiveAgent(prompt, profile, activeCourse, {
+                        onActivity: (event) => shell.addActivity(event),
+                        userQuery: query,
+                    });
+                    // Agent course tools persist their changes. Refresh the in-memory
+                    // session as well so a newly prepared course is immediately used by
+                    // /learn, /roadmap, quizzes, and the next agent turn.
+                    const refreshedProfile = await loadUserProfile();
+                    Object.assign(profile, refreshedProfile);
+                    activeCourse = profile.activeCourseId ? await loadCourse(profile.activeCourseId) : null;
                     const role = aiResponse.requiresAuth ? 'system' : 'assistant';
                     shell.add(role, aiResponse.text);
                     await historyHarness.recordMessage(role, aiResponse.text, {
@@ -452,6 +513,10 @@ function displayName(name) {
         return 'Danny';
     return accountName.charAt(0).toUpperCase() + accountName.slice(1);
 }
+function inferCourseCreationTopic(query) {
+    const match = query.trim().match(/^(?:i\s+(?:want\s+to|wanna)\s+learn|teach\s+me|help\s+me\s+learn|build\s+(?:me\s+)?a\s+roadmap\s+for|create\s+(?:a\s+)?course\s+for|i\s+need\s+to\s+master)\s+(.+)$/i);
+    return match?.[1]?.replace(/[.!?]+$/, '').trim() || null;
+}
 function selectThread(threads, selector) {
     const cleanSelector = selector.trim();
     if (!cleanSelector)
@@ -462,11 +527,19 @@ function selectThread(threads, selector) {
     return threads.find((thread) => thread.id === cleanSelector || thread.id.startsWith(cleanSelector)) || null;
 }
 function formatRoadmap(course) {
+    const progress = getCourseProgress(course);
+    const intent = normalizeLearningIntent(course.intent, course.title);
     const nodeRows = course.nodes.map((node) => {
         const marker = node.status === 'active' ? '→' : node.status === 'completed' || node.status === 'mastered' ? '✓' : '·';
         return `${marker} ${node.title.replace(/^[⚔️\s]+/, '')}`;
     });
-    return [course.title, ...nodeRows].join('\n');
+    return [
+        course.title,
+        `Goal: ${intent.goal}`,
+        `Progress: ${progress.progressPercentage}% · ${progress.completedLessons}/${progress.totalLessons} lessons · ~${progress.estimatedMinutesRemaining} min left`,
+        '',
+        ...nodeRows,
+    ].join('\n');
 }
 async function handleOnTheFlyQuiz(topic, activeCourse, profile) {
     const quizTitle = topic ? topic.toUpperCase() : activeCourse ? activeCourse.title : 'TECHNICAL SYNTHESIS';
@@ -509,7 +582,7 @@ async function handleOnTheFlyQuiz(topic, activeCourse, profile) {
         await saveUserProfile(profile);
     }
 }
-async function handleIngestPath(filePath, profile) {
+async function handleIngestPath(filePath, profile, intent) {
     const spinner = p.spinner();
     spinner.start(`Reading ${filePath}…`);
     try {
@@ -518,7 +591,9 @@ async function handleIngestPath(filePath, profile) {
         const course = await generateCourse(doc, 'standard', {
             provider: profile.apiProvider,
             apiKey: profile.apiKey,
+            intent: intent || normalizeLearningIntent(undefined, doc.title),
         });
+        activateCourse(profile, course);
         await saveCourse(course);
         profile.activeCourseId = course.id;
         await saveUserProfile(profile);
@@ -541,6 +616,7 @@ function formatHelpGuide() {
         `  ${chalk.hex('#F1F1F1')('/quiz [topic]'.padEnd(22))} ${chalk.hex('#94A3B8')('Challenge yourself with interactive questions & AI feedback')}`,
         `  ${chalk.hex('#F1F1F1')('/practice'.padEnd(22))} ${chalk.hex('#94A3B8')('Review spaced repetition items (SM-2 queue) to earn XP')}`,
         `  ${chalk.hex('#F1F1F1')('/roadmap'.padEnd(22))} ${chalk.hex('#94A3B8')('View your active learning path and completed skills')}`,
+        `  ${chalk.hex('#F1F1F1')('/courses [number]'.padEnd(22))} ${chalk.hex('#94A3B8')('Browse saved courses or switch your focus')}`,
         `  ${chalk.hex('#F1F1F1')('/load <file>'.padEnd(22))} ${chalk.hex('#94A3B8')('Turn PDF or Markdown notes into a full course')}`,
         `  ${chalk.hex('#F1F1F1')('/stats'.padEnd(22))} ${chalk.hex('#94A3B8')('View Level, XP progression, streak, and achievements')}`,
         '',
@@ -550,12 +626,15 @@ function formatHelpGuide() {
         `  ${chalk.hex('#F1F1F1')('/threads'.padEnd(22))} ${chalk.hex('#94A3B8')('Browse recent conversations and saved sessions')}`,
         `  ${chalk.hex('#F1F1F1')('/resume <id>'.padEnd(22))} ${chalk.hex('#94A3B8')('Continue a previous conversation thread')}`,
         `  ${chalk.hex('#F1F1F1')('/clear'.padEnd(22))} ${chalk.hex('#94A3B8')('Start a clean chat thread')}`,
+        `  ${chalk.hex('#F1F1F1')('/terminal-setup'.padEnd(22))} ${chalk.hex('#94A3B8')('Configure VS Code / Cursor terminal for Shift+Enter')}`,
         `  ${chalk.hex('#F1F1F1')('/exit'.padEnd(22))} ${chalk.hex('#94A3B8')('Leave the session')}`,
         '',
         chalk.hex('#E07A5F').bold('Keyboard Shortcuts:'),
+        `  ${chalk.hex('#F1F1F1')('Shift+Enter'.padEnd(22))} ${chalk.hex('#94A3B8')('Insert newline in prompt (also \\+Enter or Ctrl+J)')}`,
         `  ${chalk.hex('#F1F1F1')('/'.padEnd(22))} ${chalk.hex('#94A3B8')('Open slash command palette')}`,
         `  ${chalk.hex('#F1F1F1')('↑ / ↓'.padEnd(22))} ${chalk.hex('#94A3B8')('Navigate command palette options')}`,
         `  ${chalk.hex('#F1F1F1')('Tab'.padEnd(22))} ${chalk.hex('#94A3B8')('Autocomplete selected command')}`,
+        `  ${chalk.hex('#F1F1F1')('Ctrl+U'.padEnd(22))} ${chalk.hex('#94A3B8')('Clear current prompt')}`,
         `  ${chalk.hex('#F1F1F1')('Ctrl+C'.padEnd(22))} ${chalk.hex('#94A3B8')('Cancel active prompt / hit twice to exit')}`,
         `  ${chalk.hex('#F1F1F1')('Ctrl+D'.padEnd(22))} ${chalk.hex('#94A3B8')('Exit session cleanly')}`,
     ].join('\n');
@@ -564,10 +643,27 @@ async function handleTopicLearning(topic, profile, onCourseCreated) {
     const spinner = p.spinner();
     spinner.start(chalk.hex('#E07A5F')(`✦ Decomposing "${topic}" into bite-sized micro-concepts...`));
     try {
-        const result = await decomposeTopicIntoConcepts(topic, profile);
+        const goalInput = await p.text({
+            message: 'What do you want to be able to do with this topic?',
+            placeholder: `e.g. Build a real project, pass an interview, or explain ${topic} confidently`,
+        });
+        const levelInput = await p.select({
+            message: 'What is your current level?',
+            options: [
+                { value: 'beginner', label: 'Beginner — start from first principles' },
+                { value: 'intermediate', label: 'Intermediate — connect and apply concepts' },
+                { value: 'advanced', label: 'Advanced — sharpen depth and edge cases' },
+            ],
+            initialValue: 'intermediate',
+        });
+        const intent = normalizeLearningIntent({
+            goal: p.isCancel(goalInput) || !goalInput ? undefined : String(goalInput),
+            level: p.isCancel(levelInput) ? 'intermediate' : levelInput,
+        }, topic);
+        const result = await decomposeTopicIntoConcepts(topic, profile, { intent });
         const course = result.course;
+        activateCourse(profile, course);
         await saveCourse(course);
-        profile.activeCourseId = course.id;
         await saveUserProfile(profile);
         onCourseCreated(course);
         spinner.stop(chalk.hex('#10B981').bold(`Decomposed "${course.title}" into ${course.nodes.length} progressive concepts!`));

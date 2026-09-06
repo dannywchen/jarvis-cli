@@ -203,6 +203,68 @@ export async function listSavedCourses(): Promise<Course[]> {
   return [...courses.values()].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
+/** Remove one persisted course and any spaced-repetition items that belong to it. */
+export async function deleteCourse(courseId: string): Promise<boolean> {
+  const cleanId = courseId.trim();
+  if (!cleanId || cleanId.includes('/') || cleanId.includes('\\') || cleanId === '.' || cleanId === '..') {
+    throw new Error('A valid course id is required.');
+  }
+
+  const { coursesDir } = getStoragePaths();
+  const legacyDirectory = getLegacyStorageDirectory();
+  const candidates = [
+    path.join(coursesDir, `${cleanId}.json`),
+    legacyDirectory ? path.join(legacyDirectory, 'courses', `${cleanId}.json`) : null,
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  let removed = false;
+  for (const filePath of candidates) {
+    try {
+      await fs.unlink(filePath);
+      removed = true;
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+
+  if (removed) {
+    const reviews = await loadReviewItems();
+    await saveReviewItems(reviews.filter((item) => item.courseId !== cleanId));
+  }
+  return removed;
+}
+
+/** Remove every saved course, including courses still present in the legacy store. */
+export async function deleteAllCourses(): Promise<number> {
+  await ensureStorageDirectories();
+  const { coursesDir } = getStoragePaths();
+  const legacyDirectory = getLegacyStorageDirectory();
+  const directories = [coursesDir, legacyDirectory ? path.join(legacyDirectory, 'courses') : null]
+    .filter((directory): directory is string => Boolean(directory));
+  let removed = 0;
+
+  for (const directory of directories) {
+    let files: string[] = [];
+    try {
+      files = await fs.readdir(directory);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      try {
+        await fs.unlink(path.join(directory, file));
+        removed += 1;
+      } catch (error: any) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+    }
+  }
+
+  await saveReviewItems([]);
+  return removed;
+}
+
 export async function loadReviewItems(): Promise<SpacedReviewItem[]> {
   await ensureStorageDirectories();
   const { reviewsFile } = getStoragePaths();

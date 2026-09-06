@@ -1,14 +1,20 @@
 import chalk from 'chalk';
 import readline from 'node:readline';
+import { PassThrough } from 'node:stream';
 import { completeSlashCommand, filterSlashCommands, SlashCommand } from './commands.js';
 import type { RecentThreadSummary } from '../types/index.js';
 import { buildClaudeCodeBox, stripAnsi } from './banner.js';
+import type { AgentActivityEvent } from '../core/agentTools.js';
 
-export type ChatRole = 'user' | 'assistant' | 'system';
+export type ChatRole = 'user' | 'assistant' | 'system' | 'activity';
 
 export interface ChatEntry {
   role: ChatRole;
   text: string;
+  activityId?: string;
+  activityKind?: AgentActivityEvent['kind'];
+  activityStatus?: AgentActivityEvent['status'];
+  detail?: string;
 }
 
 export interface ChatShellContext {
@@ -27,6 +33,8 @@ export interface ChatShellOptions {
   getContext: () => ChatShellContext;
   onSubmit: (input: string) => Promise<void>;
   onClear: () => void;
+  stdin?: NodeJS.ReadableStream;
+  stdout?: NodeJS.WritableStream;
 }
 
 const ESC = '\u001B[';
@@ -43,10 +51,10 @@ function agentFrames(): string[] {
     : UNICODE_AGENT_FRAMES;
 }
 
-function terminalWidth(): number {
+function terminalWidth(stdout?: any): number {
   // The composer and transcript should use the full terminal viewport. The
   // terminal emits `resize` and render() is already subscribed to it.
-  return Math.max(36, process.stdout.columns || 88);
+  return Math.max(36, stdout?.columns || process.stdout.columns || 88);
 }
 
 function wrapAnsi(text: string, width: number): string[] {
@@ -172,11 +180,50 @@ export class TerminalChatShell {
   private keepAliveTimer?: ReturnType<typeof setInterval>;
   private renderQueued = false;
   private screenActive = false;
+  // 0 means the newest transcript lines are visible. Positive values move the
+  // transcript window toward older messages while the composer stays fixed.
+  private transcriptScrollOffset = 0;
   private lastCtrlCTime = 0;
   private finish?: () => void;
   private composerCursorLine = 1;
   private composerCursorColumn = 5;
+  private keyStream = new PassThrough();
+  private isPasting = false;
+  private lastReturnHandledTime = 0;
+
+  private get stdin(): NodeJS.ReadStream {
+    return (this.options.stdin as any) || process.stdin;
+  }
+
+  private get stdout(): NodeJS.WriteStream {
+    return (this.options.stdout as any) || process.stdout;
+  }
+
   private boundKeypress = (_: string, key: readline.Key) => this.handleKeypress(key);
+  private boundStdinData = (chunk: Buffer | string) => {
+    let str = typeof chunk === 'string' ? chunk : chunk.toString();
+    // Normalize VS Code / Cursor / Antigravity terminal sendSequence for Shift+Enter: "\\\r\n" or "\\\r" or "\\\n"
+    str = str.replace(/\\\r\n?/g, '\u001B[13;2u');
+    str = str.replace(/\\\n/g, '\u001B[13;2u');
+    // Normalize xterm modifyOtherKeys Shift/Ctrl/Alt Enter
+    str = str.replace(/\u001B\[27;2;13~/g, '\u001B[13;2u');
+    str = str.replace(/\u001B\[27;5;13~/g, '\u001B[13;5u');
+    str = str.replace(/\u001B\[27;3;13~/g, '\u001B[13;3u');
+    str = str.replace(/\u001B\[27;4;13~/g, '\u001B[13;4u');
+    str = str.replace(/\u001B\[13;2~/g, '\u001B[13;2u');
+    str = str.replace(/\u001BO2M/g, '\u001B[13;2u');
+
+    // Translate SGR mouse-wheel events into transcript scrolling before
+    // readline sees the escape bytes. The composer remains keyboard-focused.
+    str = str.replace(/\u001B\[<([0-9]+);[0-9]+;[0-9]+[mM]/g, (_match, buttonCode: string) => {
+      const button = Number(buttonCode);
+      if ((button & 64) === 64) this.scrollTranscript((button & 1) === 1 ? -3 : 3);
+      return '';
+    });
+
+    if (str) this.keyStream.write(str);
+  };
+
   private sigintHandler = () => {
     if (this.closed) return;
     const now = Date.now();
@@ -189,10 +236,17 @@ export class TerminalChatShell {
     }
   };
 
-  constructor(private readonly options: ChatShellOptions) {}
+  constructor(private readonly options: ChatShellOptions) {
+    readline.emitKeypressEvents(this.keyStream);
+    this.keyStream.on('keypress', this.boundKeypress);
+  }
+
+  getInput(): string {
+    return this.input;
+  }
 
   async start(): Promise<void> {
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    if (!this.stdin.isTTY || !this.stdout.isTTY) {
       await this.startLineFallback();
       return;
     }
@@ -202,12 +256,13 @@ export class TerminalChatShell {
       this.keepAliveTimer.ref?.();
     }
 
-    readline.emitKeypressEvents(process.stdin);
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.off('keypress', this.boundKeypress);
-    process.stdin.on('keypress', this.boundKeypress);
-    process.stdout.on('resize', this.render);
+    if (this.stdin.isTTY && typeof this.stdin.setRawMode === 'function') {
+      this.stdin.setRawMode(true);
+    }
+    this.stdin.resume();
+    this.stdin.off('data', this.boundStdinData);
+    this.stdin.on('data', this.boundStdinData);
+    this.stdout.on('resize', this.render);
     process.on('SIGINT', this.sigintHandler);
     this.enterScreen();
     this.render();
@@ -219,9 +274,30 @@ export class TerminalChatShell {
 
   add(role: ChatRole, text: string): void {
     this.transcript.push({ role, text });
-    if (!process.stdout.isTTY) {
-      const label = role === 'user' ? 'you' : role === 'assistant' ? 'jarvis' : 'status';
-      process.stdout.write(`${label}  ${text}\n`);
+    if (!this.stdout.isTTY) {
+      const label = role === 'user' ? 'you' : role === 'assistant' ? 'jarvis' : role === 'activity' ? 'activity' : 'status';
+      this.stdout.write(`${label}  ${text}\n`);
+      return;
+    }
+    this.render();
+  }
+
+  /** Adds or updates a live, non-persisted execution step in the transcript. */
+  addActivity(event: AgentActivityEvent): void {
+    const existing = this.transcript.findIndex((entry) => entry.activityId === event.id);
+    const next: ChatEntry = {
+      role: 'activity',
+      text: event.label,
+      activityId: event.id,
+      activityKind: event.kind,
+      activityStatus: event.status,
+      detail: event.detail,
+    };
+    if (existing >= 0) this.transcript[existing] = next;
+    else this.transcript.push(next);
+    if (!this.stdout.isTTY) {
+      const marker = event.status === 'complete' ? '✓' : event.status === 'error' ? '!' : '…';
+      this.stdout.write(`activity  ${marker} ${event.label}${event.detail ? ` · ${event.detail}` : ''}\n`);
       return;
     }
     this.render();
@@ -236,6 +312,7 @@ export class TerminalChatShell {
 
   clear(): void {
     this.transcript = [];
+    this.transcriptScrollOffset = 0;
     this.options.onClear();
     this.render();
   }
@@ -248,13 +325,15 @@ export class TerminalChatShell {
       clearInterval(this.keepAliveTimer);
       this.keepAliveTimer = undefined;
     }
-    if (process.stdin.isTTY) {
+    if (this.stdin.isTTY) {
       try {
-        process.stdin.setRawMode(false);
+        if (typeof this.stdin.setRawMode === 'function') {
+          this.stdin.setRawMode(false);
+        }
       } catch {}
     }
-    process.stdin.off('keypress', this.boundKeypress);
-    process.stdout.off('resize', this.render);
+    this.stdin.off('data', this.boundStdinData);
+    this.stdout.off('resize', this.render);
     process.off('SIGINT', this.sigintHandler);
     this.leaveScreen();
     this.finish?.();
@@ -266,12 +345,14 @@ export class TerminalChatShell {
 
   /** Temporarily yields the terminal to an existing interactive view. */
   async suspend<T>(run: () => Promise<T>): Promise<T> {
-    if (!process.stdin.isTTY) return run();
+    if (!this.stdin.isTTY) return run();
     this.suspended = true;
     try {
-      process.stdin.setRawMode(false);
+      if (typeof this.stdin.setRawMode === 'function') {
+        this.stdin.setRawMode(false);
+      }
     } catch {}
-    process.stdin.off('keypress', this.boundKeypress);
+    this.stdin.off('data', this.boundStdinData);
     this.leaveScreen();
     try {
       return await run();
@@ -279,13 +360,12 @@ export class TerminalChatShell {
       this.suspended = false;
       if (!this.closed) {
         try {
-          process.stdin.resume();
-          readline.emitKeypressEvents(process.stdin);
-          if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') {
-            process.stdin.setRawMode(true);
+          this.stdin.resume();
+          if (this.stdin.isTTY && typeof this.stdin.setRawMode === 'function') {
+            this.stdin.setRawMode(true);
           }
-          process.stdin.off('keypress', this.boundKeypress);
-          process.stdin.on('keypress', this.boundKeypress);
+          this.stdin.off('data', this.boundStdinData);
+          this.stdin.on('data', this.boundStdinData);
         } catch {}
         this.enterScreen();
         this.render();
@@ -294,7 +374,7 @@ export class TerminalChatShell {
   }
 
   private async startLineFallback(): Promise<void> {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const rl = readline.createInterface({ input: this.stdin, output: this.stdout });
     while (!this.closed) {
       const value = await new Promise<string>((resolve) => rl.question('› ', resolve));
       if (value.trim() === '/exit') this.close();
@@ -331,6 +411,40 @@ export class TerminalChatShell {
       return;
     }
 
+    if (key.ctrl && key.name === 'u') {
+      this.input = '';
+      this.paletteDismissed = false;
+      this.selectedCommand = 0;
+      this.render();
+      return;
+    }
+
+    if (key.name === 'paste-start') {
+      this.isPasting = true;
+      return;
+    }
+
+    if (key.name === 'paste-end') {
+      this.isPasting = false;
+      this.render();
+      return;
+    }
+
+    if (this.isPasting) {
+      if (key.name === 'return' || key.sequence === '\r') {
+        this.lastReturnHandledTime = Date.now();
+        this.input += '\n';
+        return;
+      }
+      if (key.name === 'enter' || key.sequence === '\n') {
+        if (Date.now() - this.lastReturnHandledTime < 80) return;
+        this.input += '\n';
+        return;
+      }
+      if (key.sequence) this.input += key.sequence;
+      return;
+    }
+
     const commands = this.hasOpenPalette() ? filterSlashCommands(this.input) : [];
     if (key.name === 'escape') {
       this.paletteDismissed = true;
@@ -355,24 +469,97 @@ export class TerminalChatShell {
       this.render();
       return;
     }
-    if (key.name === 'return' || key.name === 'enter') {
-      if (key.shift) {
-        this.input += '\n';
+
+    if (!commands.length) {
+      if (key.name === 'up') {
+        this.scrollTranscript(1);
+        return;
+      }
+      if (key.name === 'down') {
+        this.scrollTranscript(-1);
+        return;
+      }
+      if (key.name === 'pageup') {
+        this.scrollTranscript(this.viewportRows());
+        return;
+      }
+      if (key.name === 'pagedown') {
+        this.scrollTranscript(-this.viewportRows());
+        return;
+      }
+      if (key.name === 'home') {
+        this.transcriptScrollOffset = Number.MAX_SAFE_INTEGER;
+        this.render();
+        return;
+      }
+      if (key.name === 'end') {
+        this.transcriptScrollOffset = 0;
+        this.render();
+        return;
+      }
+    }
+
+    // Terminals supporting Kitty keyboard protocol or modifyOtherKeys report
+    // Shift+Enter / Ctrl+Enter / Alt+Enter as distinct escape sequences.
+    // Terminals with sendSequence send \u001B\r or \\\r\n.
+    const isModifierNewline =
+      key.sequence === '\u001B[13;2u' ||
+      key.sequence === '\u001B[13;5u' ||
+      key.sequence === '\u001B[13;3u' ||
+      key.sequence === '\u001B[13;4u' ||
+      key.sequence === '\u001B[13;6u' ||
+      key.sequence === '\u001B[10;2u' ||
+      key.sequence === '\u001B[10;5u' ||
+      key.sequence === '\u001B\r' ||
+      key.sequence === '\u001B\n' ||
+      (Boolean(key.shift || key.meta) && (key.name === 'return' || key.name === 'enter')) ||
+      (Boolean(key.ctrl) && (key.name === 'return' || key.name === 'j'));
+
+    if (isModifierNewline) {
+      this.input += '\n';
+      this.paletteDismissed = false;
+      this.selectedCommand = 0;
+      this.render();
+      return;
+    }
+
+    // In raw mode, Return is 0x0D ('return'). Standalone 0x0A ('enter' in Node readline)
+    // comes from Ctrl+J or terminals sending LF for Shift+Enter.
+    // If it immediately follows a Return key within 80ms, it is the LF of CRLF and should be ignored.
+    if (key.name === 'enter' || key.sequence === '\n') {
+      if (Date.now() - this.lastReturnHandledTime < 80) return;
+      this.input += '\n';
+      this.paletteDismissed = false;
+      this.selectedCommand = 0;
+      this.render();
+      return;
+    }
+
+    if (key.name === 'return' || key.sequence === '\r') {
+      this.lastReturnHandledTime = Date.now();
+
+      // Backslash line continuation: if line ends with an unescaped backslash,
+      // convert that trailing backslash into a newline instead of submitting.
+      if (/(^|[^\\])(\\\\)*\\$/.test(this.input)) {
+        this.input = this.input.slice(0, -1) + '\n';
         this.paletteDismissed = false;
         this.selectedCommand = 0;
         this.render();
         return;
       }
+
       const submitted = this.input.trim();
       if (!submitted) return;
       this.input = '';
       this.selectedCommand = 0;
       this.paletteDismissed = false;
       this.queue.push(submitted);
+      this.transcriptScrollOffset = 0;
       this.add('user', submitted);
       void this.drainQueue();
       return;
     }
+
     if (key.name === 'backspace') this.input = this.input.slice(0, -1);
     else if (!key.ctrl && key.sequence && key.sequence >= ' ') this.input += key.sequence;
     this.paletteDismissed = false;
@@ -410,11 +597,11 @@ export class TerminalChatShell {
   };
 
   private renderNow = (): void => {
-    if (this.closed || this.suspended || !process.stdout.isTTY) return;
-    const width = terminalWidth();
+    if (this.closed || this.suspended || !this.stdout.isTTY) return;
+    const width = terminalWidth(this.stdout);
     const contentWidth = width - 8;
     const context = this.options.getContext();
-    const rows = Math.max(16, process.stdout.rows || 30);
+    const rows = Math.max(16, this.stdout.rows || 30);
 
     const composer = this.renderComposer(width);
     const allCommands = this.hasOpenPalette() ? filterSlashCommands(this.input) : [];
@@ -444,12 +631,17 @@ export class TerminalChatShell {
       }
       transcriptLines.push('');
     } else {
-      for (const entry of this.transcript) {
+      for (let entryIndex = 0; entryIndex < this.transcript.length; entryIndex += 1) {
+        const entry = this.transcript[entryIndex];
         if (entry.role === 'user') {
           const userPill = (val: string) => chalk.bgHex('#282828').hex('#F0F0F0')(val);
-          const parts = wrapAnsi(`> ${entry.text}`, contentWidth);
-          for (const part of parts) {
-            transcriptLines.push(`  ${userPill(part)}`);
+          const paragraphs = entry.text.split('\n');
+          for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+            const prefix = pIdx === 0 ? '> ' : '  ';
+            const parts = wrapAnsi(`${prefix}${paragraphs[pIdx]}`, contentWidth);
+            for (const part of parts) {
+              transcriptLines.push(`  ${userPill(part)}`);
+            }
           }
         } else if (entry.role === 'assistant') {
           const formattedLines = formatMarkdownAssistant(entry.text, contentWidth);
@@ -459,6 +651,19 @@ export class TerminalChatShell {
               transcriptLines.push(`    ${formattedLines[i]}`);
             }
           }
+        } else if (entry.role === 'activity') {
+          const previous = this.transcript[entryIndex - 1];
+          if (previous?.role !== 'activity') {
+            transcriptLines.push(`  ${chalk.hex('#D97757')('◇')} ${chalk.hex('#9A9A9A')('Agent activity')}`);
+          }
+          const marker = entry.activityStatus === 'complete' ? chalk.hex('#6FAF76')('✓')
+            : entry.activityStatus === 'error' ? chalk.hex('#C56A62')('!')
+              : chalk.hex('#D97757')('·');
+          const detail = entry.detail ? chalk.hex('#777777')(` · ${entry.detail}`) : '';
+          const parts = wrapAnsi(`${marker} ${entry.text}${detail}`, contentWidth - 4);
+          for (const part of parts) transcriptLines.push(`    ${part}`);
+          const next = this.transcript[entryIndex + 1];
+          if (next?.role !== 'activity') transcriptLines.push('');
         } else {
           // system
           const color = chalk.hex('#8A8A8A');
@@ -474,7 +679,10 @@ export class TerminalChatShell {
       }
     }
 
-    const visibleTranscript = transcriptLines.slice(-bodyRows);
+    const maxScrollOffset = Math.max(0, transcriptLines.length - bodyRows);
+    this.transcriptScrollOffset = Math.min(Math.max(0, this.transcriptScrollOffset), maxScrollOffset);
+    const transcriptEnd = transcriptLines.length - this.transcriptScrollOffset;
+    const visibleTranscript = transcriptLines.slice(Math.max(0, transcriptEnd - bodyRows), transcriptEnd);
     const body = this.isWelcomeState()
       ? [...visibleTranscript, ...Array(Math.max(0, bodyRows - visibleTranscript.length)).fill('')]
       : [...Array(Math.max(0, bodyRows - visibleTranscript.length)).fill(''), ...visibleTranscript];
@@ -491,21 +699,26 @@ export class TerminalChatShell {
     // One write keeps the clear + paint + cursor placement atomic. The final
     // newline is intentionally omitted: it would create an extra scroll step
     // when the last status row exactly fills the terminal width.
-    process.stdout.write(`${ESC}?25l${ESC}H${ESC}2J${lines.join('\n')}${moveToPrompt}${ESC}?25h`);
+    this.stdout.write(`${ESC}?25l${ESC}H${ESC}2J${lines.join('\n')}${moveToPrompt}${ESC}?25h`);
   };
 
   /** Keep the chat viewport independent from the terminal's normal scrollback. */
   private enterScreen(): void {
-    if (this.screenActive || !process.stdout.isTTY) return;
+    if (this.screenActive || !this.stdout.isTTY) return;
     // 1049 preserves the user's normal shell screen and gives the chat a
     // fixed viewport, so cursor movement cannot push the shell's scrollback.
-    process.stdout.write(`${ESC}?1049h${ESC}?25l`);
+    // >1u asks supporting terminals (Kitty, Ghostty, WezTerm) to disambiguate modified keys.
+    // ?2004h enables bracketed paste mode so multi-line pastes don't prematurely submit.
+    // ?1000h + ?1006h lets us translate terminal wheel events into transcript scrolling.
+    this.stdout.write(`${ESC}?1049h${ESC}?25l${ESC}>1u${ESC}?2004h${ESC}?1000h${ESC}?1006h`);
     this.screenActive = true;
   }
 
   private leaveScreen(): void {
-    if (!this.screenActive || !process.stdout.isTTY) return;
-    process.stdout.write(`${ESC}?25h${ESC}?1049l`);
+    if (!this.screenActive || !this.stdout.isTTY) return;
+    // Restore the terminal's prior keyboard reporting mode and bracketed paste before returning
+    // control to the user's shell.
+    this.stdout.write(`${ESC}?1006l${ESC}?1000l${ESC}?2004l${ESC}<u${ESC}?25h${ESC}?1049l`);
     this.screenActive = false;
   }
 
@@ -521,7 +734,11 @@ export class TerminalChatShell {
   }
 
   private renderComposer(width: number): string[] {
-    const hr = chalk.hex('#353535')('─'.repeat(width));
+    // Leave the rightmost column empty. A rule that reaches the terminal's
+    // exact width can trigger the terminal's automatic right-margin wrap,
+    // consuming an extra physical row and pushing the composer below the
+    // viewport until the next scroll event.
+    const hr = chalk.hex('#353535')('─'.repeat(Math.max(1, width - 1)));
     const inputWidth = Math.max(12, width - 4);
     const promptChar = chalk.hex('#D97757')('>');
     const placeholder = chalk.hex('#666666')('try "learn quantum computing" or ask any question...');
@@ -537,16 +754,17 @@ export class TerminalChatShell {
     this.composerCursorLine = 1 + lastInputLine;
     this.composerCursorColumn = Math.min(width, 5 + inputLines[lastInputLine].length);
 
-    // Keep the status strip in one stable row below the composer. While Jarvis
-    // is responding, the animated activity replaces manual mode in this exact
-    // slot so the indicator does not jump vertically or change the composer
-    // height.
+    // Keep the lower divider and status row present in the idle state too.
+    // They are part of the composer viewport, so omitting them at the latest
+    // scroll position makes the bottom of the text box appear clipped.
     lines.push(hr);
     if (this.isWorking) {
       const frame = agentFrames()[this.animationFrame % agentFrames().length];
       const queued = this.queue.length ? ` · ${this.queue.length} queued` : '';
       const activity = `  ${chalk.hex('#D97757')(frame)} ${chalk.hex('#888888')(WORKING_PHRASES[this.animationFrame % WORKING_PHRASES.length])}${queued}`;
       lines.push(truncate(activity, width));
+    } else if (this.transcriptScrollOffset > 0) {
+      lines.push(chalk.hex('#777777')(truncate('  ↕ history · ↑↓ / pgup pgdn · end for latest', width)));
     } else {
       lines.push(chalk.hex('#777777')(truncate('  ↪ manual mode · shift+enter for newline · ↑↓ for commands · ctrl+c to exit', width)));
     }
@@ -566,6 +784,16 @@ export class TerminalChatShell {
       }
     }
     return lines.length ? lines : [''];
+  }
+
+  private viewportRows(): number {
+    return Math.max(1, (this.stdout.rows || 30) - 8);
+  }
+
+  private scrollTranscript(delta: number): void {
+    if (!this.transcript.length) return;
+    this.transcriptScrollOffset = Math.max(0, this.transcriptScrollOffset + delta);
+    this.render();
   }
 
   private startAnimation(): void {

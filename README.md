@@ -4,6 +4,8 @@
 
 Jarvis CLI is a terminal-native learning game and study accelerator. Feed in any PDF, research paper, textbook chapter, or markdown note. Jarvis CLI parses the material, synthesizes core mental models, and builds a gamified skill tree with bite-sized lessons, interactive drills, combo multipliers, streaks, hearts, and spaced repetition.
 
+The core loop is outcome-driven: tell Jarvis what you want to be able to do, and it turns that intent into a progressive roadmap. Your active course becomes the operating context for tutoring, quizzes, code questions, reviews, and next-step recommendations. Courses are durable and swappable, so you can keep several learning tracks without losing your place.
+
 ```
    ___    ___              ____          __
   / _ \__ / _ \___  ___    / ___/ __ ___  ___/ /__
@@ -27,6 +29,7 @@ Jarvis CLI is a terminal-native learning game and study accelerator. Feed in any
 - **Interactive REPL Hub**: Arrow-key navigation, instant validation, clean markdown cards, and fluid CLI animations.
 - **Thinking Spinners**: Visual progress indicators for document parsing, semantic analysis, and curriculum synthesis.
 - **Design Guidelines Compliant**: Dark/muted terminal borders and cards with high contrast readability and zero distracting white outlines.
+- **Outcome-Driven Tutor Context**: Every generated course can store a target outcome, level, preferred mode, and resumable next lesson; free-form agent chat uses that context to stay focused on mastery.
 
 ### 2. Duolingo Gamification Engine
 - **3 Adaptive Paces**:
@@ -97,6 +100,16 @@ node bin/jarvis.js learn
 # View visual skill tree and roadmap progress
 node bin/jarvis.js roadmap
 
+# Browse saved courses or switch focus (also works inside the REPL as /courses)
+node bin/jarvis.js courses
+node bin/jarvis.js courses 2
+
+# Build an outcome-specific plan from a topic
+node bin/jarvis.js topic "Rust concurrency" --goal "Build a safe concurrent service" --level intermediate
+
+# Build an outcome-specific plan from a document
+node bin/jarvis.js load ./notes.md --goal "Pass a systems design interview" --level advanced
+
 # View profile stats, level progress bar, and badge showcase
 node bin/jarvis.js stats
 
@@ -114,6 +127,12 @@ Jarvis CLI connects directly to production LLM APIs with real-time credential va
 /auth     # Open authentication manager & live key validator
 /model    # Switch models dynamically across Google Gemini, OpenAI, and Anthropic
 ```
+
+### Agent activity trace
+
+Workspace-oriented prompts can now use a small local tool belt. When the active model needs context, the chat shows live, factual steps such as `Read src/index.ts`, `Searched for "queryActiveAgent"`, `Edited src/core/agentTools.ts`, or `Ran npm test`. These are execution events from actual operations, not simulated chain-of-thought; private reasoning is never rendered or persisted.
+
+The tools are intentionally scoped to the current workspace. Reads and searches are available for code tasks, safe inspection commands plus `npm test` and `npm run build` can be run, and file writes only run when the user explicitly asks to change files. Ordinary tutoring prompts stay on the existing one-request path; only tasks that actually need workspace inspection may use additional model turns.
 
 ### Supported Production Models
 
@@ -163,7 +182,13 @@ node bin/jarvis.js agent lesson
 
 # Submit a learner's answer and get AI evaluation, XP gains, and badge updates
 node bin/jarvis.js agent submit -q <questionId> -a "<answer>"
+
+# List or switch the active course for an external agent
+node bin/jarvis.js agent courses
+node bin/jarvis.js agent courses 2
 ```
+
+Inside the interactive hub, use `/courses` to open the course switcher, `/courses <number-or-id>` to switch directly, `/roadmap` to see the active goal and progress, and `/learn` (or `/next`) to continue the loaded next lesson. You can also say “I want to learn Rust concurrency” or “build me a roadmap for system design” and Jarvis will create the course flow automatically. Natural-language questions remain available at any time; Jarvis interprets whether you want an explanation, comparison, application, quiz, review, debugging help, or a roadmap adjustment and keeps the answer connected to the active course when relevant.
 
 ---
 

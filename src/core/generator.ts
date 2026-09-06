@@ -1,6 +1,7 @@
 import { ParsedDocument } from './parser.js';
 import { Course, Pace, SkillNode, Lesson, Question, MatchPair } from '../types/index.js';
 import { generateCurriculumWithLlm, LlmConfig } from './ai.js';
+import { normalizeLearningIntent } from './learningEngine.js';
 
 interface KeywordFact {
   term: string;
@@ -163,6 +164,8 @@ export async function generateCourse(
     createdAt: new Date().toISOString(),
     summary: `Comprehensive ${pace} learning track synthesized from ${doc.title} (${doc.wordCount} words).`,
     nodes,
+    intent: normalizeLearningIntent(config?.intent, doc.title),
+    currentNodeId: nodes[0]?.id,
   };
 }
 

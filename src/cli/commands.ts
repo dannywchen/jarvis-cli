@@ -49,6 +49,13 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     aliases: ['map', 'path', 'curriculum'],
   },
   {
+    name: 'courses',
+    description: 'Browse saved courses or switch your active course',
+    aliases: ['course', 'library', 'switch', 'focus', 'select', 'use'],
+    acceptsArgument: true,
+    argumentHint: 'number or course id',
+  },
+  {
     name: 'practice',
     description: 'Review spaced repetition items and earn XP',
     aliases: ['review', 'spaced', 'sr'],
@@ -91,6 +98,11 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     name: 'help',
     description: 'Show command guide and keyboard shortcuts',
     aliases: ['commands', 'guide', 'shortcuts', '?'],
+  },
+  {
+    name: 'terminal-setup',
+    description: 'Configure VS Code / Cursor terminal keybindings for Shift+Enter',
+    aliases: ['term', 'setup-terminal', 'keybindings'],
   },
   {
     name: 'clear',
