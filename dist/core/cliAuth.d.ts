@@ -1,7 +1,7 @@
-export declare const GEMINI_CLIENT_ID = "REDACTED_GOOGLE_OAUTH_CLIENT_ID";
-export declare const GEMINI_CLIENT_SECRET = "REDACTED_GOOGLE_OAUTH_CLIENT_SECRET";
-export declare const ANTIGRAVITY_CLIENT_ID = "REDACTED_GOOGLE_OAUTH_CLIENT_ID";
-export declare const ANTIGRAVITY_CLIENT_SECRET = "REDACTED_GOOGLE_OAUTH_CLIENT_SECRET";
+export declare const GEMINI_CLIENT_ID: string;
+export declare const GEMINI_CLIENT_SECRET: string;
+export declare const ANTIGRAVITY_CLIENT_ID: string;
+export declare const ANTIGRAVITY_CLIENT_SECRET: string;
 export declare const GOOGLE_SCOPES: string[];
 export declare const REDIRECT_PORT = 51121;
 export declare const REDIRECT_URI = "http://localhost:51121/oauth-callback";

@@ -6,10 +6,10 @@ import crypto from "crypto";
 import { exec, spawn } from "child_process";
 import { promisify } from "util";
 const execAsync = promisify(exec);
-export const GEMINI_CLIENT_ID = "REDACTED_GOOGLE_OAUTH_CLIENT_ID";
-export const GEMINI_CLIENT_SECRET = "REDACTED_GOOGLE_OAUTH_CLIENT_SECRET";
-export const ANTIGRAVITY_CLIENT_ID = "REDACTED_GOOGLE_OAUTH_CLIENT_ID";
-export const ANTIGRAVITY_CLIENT_SECRET = "REDACTED_GOOGLE_OAUTH_CLIENT_SECRET";
+export const GEMINI_CLIENT_ID = process.env.GEMINI_CLIENT_ID || "";
+export const GEMINI_CLIENT_SECRET = process.env.GEMINI_CLIENT_SECRET || "";
+export const ANTIGRAVITY_CLIENT_ID = process.env.ANTIGRAVITY_CLIENT_ID || "";
+export const ANTIGRAVITY_CLIENT_SECRET = process.env.ANTIGRAVITY_CLIENT_SECRET || "";
 export const GOOGLE_SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -46,7 +46,7 @@ export function scanDetectedCliSessions() {
                 harness: "antigravity-cli",
                 name: "Antigravity CLI (OAuth)",
                 email,
-                defaultModel: "gemini-2.0-flash",
+                defaultModel: "gemini-3.8-flash-tiered",
                 token: tokenObj.access_token,
                 hasValidSession: !!(tokenObj.access_token || tokenObj.refresh_token),
             });
@@ -65,7 +65,7 @@ export function scanDetectedCliSessions() {
                     harness: "gemini-cli",
                     name: "Gemini CLI (OAuth)",
                     email,
-                    defaultModel: "gemini-2.0-flash",
+                    defaultModel: "gemini-3.8-flash-tiered",
                     token: creds.access_token,
                     hasValidSession: !!(creds.access_token || creds.refresh_token),
                 });
@@ -229,6 +229,9 @@ export async function executeCodexPrompt(prompt, model = "gpt-4o") {
     });
 }
 export async function startGoogleOAuthServer() {
+    if (!GEMINI_CLIENT_ID || !GEMINI_CLIENT_SECRET) {
+        throw new Error("Google OAuth requires GEMINI_CLIENT_ID and GEMINI_CLIENT_SECRET environment variables.");
+    }
     const verifier = crypto.randomBytes(32).toString("base64url");
     const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
     const state = crypto.randomBytes(16).toString("hex");
